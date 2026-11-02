@@ -1,0 +1,1232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Myles Liu <lyx981mike@gmail.com>
+Date: Mon, 2 Nov 2026 08:03:26 -0800
+Subject: [PATCH 1/2] qualcommax: ipq50xx: add Xiaomi Redmi AX3000 (RA81) with
+ NSS
+
+Board support modelled on the Xiaomi CR8806 (same IPQ5000 + QCN6102 + QCA8337,
+256 MiB) with the RA81 specifics from lutvzn/RA81OpenWRT (v25.12.5 port):
+
+- DTS: QCA8337 CPU port 6 over SGMII (MX2000 layout, vendor MAC6_SGMII),
+  TZ 4 MiB, TSENS off, NSS heap 8 MiB, coherent_pool=512K, CR8806 Wi-Fi
+  memory layout with the Xiaomi-Redmi-AX3000 calibration variant
+- RA81 board data (IPQ5000 board 0x24, QCN6102 0x60) in ipq-wifi files/
+- Xiaomi dual-boot A/B upgrade with rollback (preinit arm, init confirm)
+- RA81 in the ath11k 256M default and the CR8806 ECM fraglist-GRO default
+- drop the NSS bring-up debug options (serial SysRq, unrestricted /dev/mem)
+---
+ .../uboot-envtools/files/qualcommax_ipq50xx   |   3 +-
+ package/firmware/ipq-wifi/Makefile            |   2 +
+ .../files/board-xiaomi_redmi-ax3000.ipq5018   | Bin 0 -> 131184 bytes
+ .../files/board-xiaomi_redmi-ax3000.qcn6122   | Bin 0 -> 131184 bytes
+ package/kernel/mac80211/ath.mk                |   2 +-
+ .../qualcommax/dts/ipq5018-redmi-ax3000.dts   | 426 ++++++++++++++++++
+ target/linux/qualcommax/image/ipq50xx.mk      |  24 +
+ .../ipq50xx/base-files/etc/board.d/01_leds    |   3 +
+ .../ipq50xx/base-files/etc/board.d/02_network |   3 +-
+ .../etc/hotplug.d/firmware/11-ath11k-caldata  |   4 +-
+ .../base-files/etc/init.d/xiaomi-dualboot     |  12 +
+ .../etc/uci-defaults/15_cr8806_ecm_gro_list   |   5 +-
+ .../lib/functions/xiaomi-dualboot.sh          |  89 ++++
+ .../base-files/lib/preinit/81_xiaomi_dualboot |  11 +
+ .../base-files/lib/upgrade/platform.sh        |   3 +
+ .../base-files/lib/upgrade/xiaomi-dualboot.sh |  31 ++
+ .../linux/qualcommax/ipq50xx/config-default   |   4 -
+ 17 files changed, 613 insertions(+), 9 deletions(-)
+ create mode 100644 package/firmware/ipq-wifi/files/board-xiaomi_redmi-ax3000.ipq5018
+ create mode 100644 package/firmware/ipq-wifi/files/board-xiaomi_redmi-ax3000.qcn6122
+ create mode 100644 target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
+ create mode 100755 target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot
+ create mode 100644 target/linux/qualcommax/ipq50xx/base-files/lib/functions/xiaomi-dualboot.sh
+ create mode 100644 target/linux/qualcommax/ipq50xx/base-files/lib/preinit/81_xiaomi_dualboot
+ create mode 100644 target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/xiaomi-dualboot.sh
+
+diff --git a/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx b/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
+index e577162..e304f80 100644
+--- a/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
++++ b/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
+@@ -44,7 +44,8 @@ yuncore,ax830|\
+ yuncore,ax850)
+ 	ubootenv_add_mtd "0:APPSBLENV" "0x0" "0x10000" "0x10000"
+ 	;;
+-xiaomi,cr8806)
++xiaomi,cr8806|\
++xiaomi,redmi-ax3000)
+ 	ubootenv_add_mtd "0:appsblenv" "0x0" "0x10000" "0x20000"
+ 	ubootenv_add_sys_mtd "bdata" "0x0" "0x10000" "0x20000"
+ 	;;
+diff --git a/package/firmware/ipq-wifi/Makefile b/package/firmware/ipq-wifi/Makefile
+index 33db856..d9256f6 100644
+--- a/package/firmware/ipq-wifi/Makefile
++++ b/package/firmware/ipq-wifi/Makefile
+@@ -133,6 +133,7 @@ ALLWIFIBOARDS:= \
+ 	xiaomi_ax3600 \
+ 	xiaomi_ax6000 \
+ 	xiaomi_cr8806 \
++	xiaomi_redmi-ax3000 \
+ 	xiaomi_ax9000 \
+ 	xiaomi_mi-router-ax3000t-v2 \
+ 	xiaomi_redmi-ax5400 \
+@@ -355,6 +356,7 @@ $(eval $(call generate-ipq-wifi-package,xiaomi_aiot-ac2350,Xiaomi AIoT AC2350))
+ $(eval $(call generate-ipq-wifi-package,xiaomi_ax3600,Xiaomi AX3600))
+ $(eval $(call generate-ipq-wifi-package,xiaomi_ax6000,Xiaomi AX6000))
+ $(eval $(call generate-ipq-wifi-package,xiaomi_cr8806,Xiaomi CR8806))
++$(eval $(call generate-ipq-wifi-package,xiaomi_redmi-ax3000,Xiaomi Redmi AX3000))
+ $(eval $(call generate-ipq-wifi-package,xiaomi_ax9000,Xiaomi AX9000))
+ $(eval $(call generate-ipq-wifi-package,xiaomi_mi-router-ax3000t-v2,Xiaomi Mi Router AX3000T v2))
+ $(eval $(call generate-ipq-wifi-package,xiaomi_redmi-ax5400,Xiaomi Redmi AX5400))
+diff --git a/package/firmware/ipq-wifi/files/board-xiaomi_redmi-ax3000.ipq5018 b/package/firmware/ipq-wifi/files/board-xiaomi_redmi-ax3000.ipq5018
+new file mode 100644
+index 0000000000000000000000000000000000000000..fd237c21778ef900cc37ac3223ba5d58c05eb842
+GIT binary patch
+literal 131184
+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
+HfdK*lcDZnu
+
+literal 0
+HcmV?d00001
+
+diff --git a/package/firmware/ipq-wifi/files/board-xiaomi_redmi-ax3000.qcn6122 b/package/firmware/ipq-wifi/files/board-xiaomi_redmi-ax3000.qcn6122
+new file mode 100644
+index 0000000000000000000000000000000000000000..876e355426c72a0cc6867ce1915eca7fd58c4048
+GIT binary patch
+literal 131184
+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
+C#VOYS
+
+literal 0
+HcmV?d00001
+
+diff --git a/package/kernel/mac80211/ath.mk b/package/kernel/mac80211/ath.mk
+index fdac646..e86a535 100644
+--- a/package/kernel/mac80211/ath.mk
++++ b/package/kernel/mac80211/ath.mk
+@@ -483,7 +483,7 @@ define KernelPackage/ath11k/config
+        choice
+             prompt "Memory Profile"
+             depends on PACKAGE_kmod-ath11k
+-            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2
++            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2
+             default ATH11K_MEM_PROFILE_1G
+             help
+             	This option allows you to select the memory profile.
+diff --git a/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
+new file mode 100644
+index 0000000..1109e40
+--- /dev/null
++++ b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
+@@ -0,0 +1,426 @@
++// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
++
++/dts-v1/;
++
++#include "ipq5018.dtsi"
++#include "ipq5018-ess.dtsi"
++#include "ipq5018-qcn6122.dtsi"
++#include "ipq5018-nss.dtsi"
++
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/input.h>
++#include <dt-bindings/leds/common.h>
++
++/ {
++	model = "Xiaomi Redmi AX3000";
++	compatible = "xiaomi,redmi-ax3000", "qcom,ipq5018";
++
++	reserved-memory {
++		q6_region_qcn6122_1: q6-region-qcn6122-1@4d200000 {
++			reg = <0x0 0x4d200000 0x0 0xd00000>;
++			no-map;
++		};
++
++		m3_dump_qcn6122_1: m3-dump-qcn6122-1@4df00000 {
++			reg = <0x0 0x4df00000 0x0 0x100000>;
++			no-map;
++		};
++	};
++
++	aliases {
++		serial0 = &blsp1_uart1;
++		label-mac-device = &gmac1;
++		led-boot = &led_status_blue;
++		led-failsafe = &led_status_yellow;
++		led-running = &led_status_blue;
++		led-upgrade = &led_status_yellow;
++	};
++
++	chosen {
++		/*
++		 * The stock U-Boot (bootmiwifi) selects one of the two UBI
++		 * slots and passes "ubi.mtd=rootfs" or "ubi.mtd=rootfs_1"
++		 * together with "root=mtd:ubi_rootfs". Keep its ubi.mtd and
++		 * only override the root device.
++		 *
++		 * coherent_pool=512K as on the other 256 MiB boards.
++		 */
++		bootargs-append = " root=/dev/ubiblock0_1 swiotlb=1 coherent_pool=512K";
++		stdout-path = "serial0:115200n8";
++	};
++
++	keys {
++		compatible = "gpio-keys";
++		pinctrl-0 = <&button_pins>;
++		pinctrl-names = "default";
++
++		reset-button {
++			label = "reset";
++			gpios = <&tlmm 25 GPIO_ACTIVE_LOW>;
++			linux,code = <KEY_RESTART>;
++			debounce-interval = <60>;
++		};
++
++		mesh-button {
++			label = "mesh";
++			gpios = <&tlmm 23 GPIO_ACTIVE_LOW>;
++			linux,code = <KEY_WPS_BUTTON>;
++			debounce-interval = <60>;
++		};
++	};
++
++	leds {
++		compatible = "gpio-leds";
++		pinctrl-0 = <&led_pins>;
++		pinctrl-names = "default";
++
++		led_status_yellow: led-0 {
++			gpios = <&tlmm 17 GPIO_ACTIVE_HIGH>;
++			color = <LED_COLOR_ID_YELLOW>;
++			function = LED_FUNCTION_STATUS;
++		};
++
++		led_status_blue: led-1 {
++			gpios = <&tlmm 19 GPIO_ACTIVE_HIGH>;
++			color = <LED_COLOR_ID_BLUE>;
++			function = LED_FUNCTION_STATUS;
++		};
++
++		led-2 {
++			gpios = <&tlmm 20 GPIO_ACTIVE_HIGH>;
++			color = <LED_COLOR_ID_YELLOW>;
++			function = LED_FUNCTION_WAN;
++		};
++
++		led-3 {
++			gpios = <&tlmm 22 GPIO_ACTIVE_HIGH>;
++			color = <LED_COLOR_ID_BLUE>;
++			function = LED_FUNCTION_WAN;
++		};
++	};
++};
++
++/*
++ * The vendor firmware reserves 4 MiB for TZ here (the IPQ5018 default
++ * is 2 MiB); keep Linux out of the whole region.
++ */
++&tz_region {
++	reg = <0x0 0x4ac00000 0x0 0x400000>;
++};
++
++/*
++ * TSENS is not enabled by the boot firmware on this IPQ5000 ("tsens
++ * device is not enabled" with the vendor kernel) and some of its zones
++ * report bogus critical temperatures, which shuts the board down early
++ * in boot - before the dual-boot rollback is armed. Keep it off.
++ */
++&tsens {
++	status = "disabled";
++};
++
++&sleep_clk {
++	clock-frequency = <32000>;
++};
++
++&xo_board_clk {
++	clock-div = <4>;
++	clock-mult = <1>;
++};
++
++&blsp1_uart1 {
++	status = "okay";
++
++	pinctrl-0 = <&serial_0_pins>;
++	pinctrl-names = "default";
++};
++
++&prng {
++	status = "okay";
++};
++
++&qfprom {
++	status = "okay";
++};
++
++&qpic_bam {
++	status = "okay";
++};
++
++&qpic_nand {
++	pinctrl-0 = <&qpic_pins>;
++	pinctrl-names = "default";
++	status = "okay";
++
++	/* GigaDevice GD5F1GQ5REYIG, 128 MiB */
++	nand@0 {
++		compatible = "spi-nand";
++		reg = <0>;
++		nand-ecc-engine = <&qpic_nand>;
++		/* Must match the factory/QSDK layout (BCH8, 512-byte steps) */
++		nand-ecc-step-size = <512>;
++		nand-ecc-strength = <8>;
++		nand-bus-width = <8>;
++
++		partitions {
++			compatible = "qcom,smem-part";
++
++			partition-art {
++				label = "0:art";
++				read-only;
++
++				nvmem-layout {
++					compatible = "fixed-layout";
++					#address-cells = <1>;
++					#size-cells = <1>;
++
++					macaddr_art_0: mac-address@0 {
++						compatible = "mac-base";
++						reg = <0x0 0x6>;
++						#nvmem-cell-cells = <1>;
++					};
++
++					macaddr_art_6: mac-address@6 {
++						compatible = "mac-base";
++						reg = <0x6 0x6>;
++						#nvmem-cell-cells = <1>;
++					};
++				};
++			};
++		};
++	};
++};
++
++/*
++ * ===============================================================
++ *     _______________________         _______________________
++ *    |        IPQ5000        |       |        QCA8337        |
++ *    | +------+   +--------+ |       | +--------+   +------+ |
++ *    | | MAC0 |---| GE Phy |-+--UTP--+-|  Phy4  |---| MAC5 | |
++ *    | +------+   +--------+ |       | +--------+   +------+ |
++ *    | +------+   +--------+ |       | +--------+   +------+ |
++ *    | | MAC1 |---| Uniphy |-+-SGMII-+-| SerDes |---| MAC6 | |
++ *    | +------+   +--------+ |       | +--------+   +------+ |
++ *    |_______________________|       |_______________________|
++ *
++ * QCA8337 Phy0..Phy2 -> LAN1..LAN3, Phy3 -> WAN.
++ * Only the SGMII link (MAC1 <-> MAC6) is used as the DSA CPU port,
++ * the same arrangement as the vendor firmware's eth1 (switch port 6)
++ * and the Linksys MX2000.
++ * ===============================================================
++ */
++
++&uniphy0 {
++	status = "okay";
++
++	assigned-clocks = <&uniphy0 UNIPHY_CLK_REF>;
++	assigned-clock-rates = <UNIPHY_REFCLK_25MHZ>;
++};
++
++// MAC1 ---SGMII---> QCA8337 SerDes
++&gmac1 {
++	status = "okay";
++
++	phy-mode = "sgmii";
++
++	nvmem-cells = <&macaddr_art_6 0>;
++	nvmem-cell-names = "mac-address";
++
++	fixed-link {
++		speed = <1000>;
++		full-duplex;
++	};
++};
++
++&mdio0 {
++	status = "okay";
++};
++
++&mdio1 {
++	status = "okay";
++
++	pinctrl-0 = <&mdio1_pins>;
++	pinctrl-names = "default";
++	reset-gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
++
++	// QCA8337 Phy0 -> LAN1
++	qca8337_0: ethernet-phy@0 {
++		reg = <0>;
++	};
++
++	// QCA8337 Phy1 -> LAN2
++	qca8337_1: ethernet-phy@1 {
++		reg = <1>;
++	};
++
++	// QCA8337 Phy2 -> LAN3
++	qca8337_2: ethernet-phy@2 {
++		reg = <2>;
++	};
++
++	// QCA8337 Phy3 -> WAN
++	qca8337_3: ethernet-phy@3 {
++		reg = <3>;
++	};
++
++	// QCA8337 Phy4 -> IPQ5000 GE Phy (unused)
++	qca8337_4: ethernet-phy@4 {
++		reg = <4>;
++	};
++
++	switch1: ethernet-switch@17 {
++		compatible = "qca,qca8337";
++		reg = <17>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		ethernet-ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			ethernet-port@1 {
++				reg = <1>;
++				label = "lan1";
++				phy-handle = <&qca8337_0>;
++			};
++
++			ethernet-port@2 {
++				reg = <2>;
++				label = "lan2";
++				phy-handle = <&qca8337_1>;
++			};
++
++			ethernet-port@3 {
++				reg = <3>;
++				label = "lan3";
++				phy-handle = <&qca8337_2>;
++			};
++
++			ethernet-port@4 {
++				reg = <4>;
++				label = "wan";
++				phy-handle = <&qca8337_3>;
++
++				nvmem-cells = <&macaddr_art_0 0>;
++				nvmem-cell-names = "mac-address";
++			};
++
++			ethernet-port@6 {
++				reg = <6>;
++				label = "cpu";
++				phy-mode = "sgmii";
++				ethernet = <&gmac1>;
++				qca,sgmii-enable-pll;
++
++				fixed-link {
++					speed = <1000>;
++					full-duplex;
++				};
++			};
++		};
++	};
++};
++
++&tlmm {
++	button_pins: button-state {
++		pins = "gpio23", "gpio25";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-up;
++	};
++
++	led_pins: led-state {
++		pins = "gpio17", "gpio19", "gpio20", "gpio22";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-down;
++	};
++
++	mdio1_pins: mdio-state {
++		mdc-pins {
++			pins = "gpio36";
++			function = "mdc";
++			drive-strength = <8>;
++			bias-pull-up;
++		};
++
++		mdio-pins {
++			pins = "gpio37";
++			function = "mdio";
++			drive-strength = <8>;
++			bias-pull-up;
++		};
++	};
++
++	qpic_pins: qpic-state {
++		clock-pins {
++			pins = "gpio9";
++			function = "qspi_clk";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		cs-pins {
++			pins = "gpio8";
++			function = "qspi_cs";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		data-pins {
++			pins = "gpio4", "gpio5", "gpio6", "gpio7";
++			function = "qspi_data";
++			drive-strength = <8>;
++			bias-disable;
++		};
++	};
++
++	serial_0_pins: uart0-state {
++		pins = "gpio28", "gpio29";
++		function = "blsp0_uart1";
++		drive-strength = <8>;
++		bias-disable;
++	};
++};
++
++&q6v5_wcss {
++	/* QCN6102 radio on PCIe1, user PD 2, reset on GPIO27 */
++	boot-args = </*       type:	*/ 0x2 /* PCIE1	*/
++		     /*     length:	*/ 4
++		     /*     UPD ID:	*/ 2
++		     /* reset GPIO:	*/ 27
++		     /*   reserved:	*/ 0 0>;
++	status = "okay";
++};
++
++/*
++ * 256 MiB of RAM: use the low-memory firmware profile (mode 2), as the
++ * vendor firmware does (qcom,tgt-mem-mode = <2>). Memory layout as on the
++ * CR8806, which shares the SoC, radios and boot firmware with the RA81.
++ */
++&wifi {
++	status = "okay";
++	ieee80211-freq-limit = <2400000 2483000>;
++
++	// IPQ5000 2.4 GHz
++	qcom,rproc = <&q6v5_wcss>;
++	qcom,ath11k-calibration-variant = "Xiaomi-Redmi-AX3000";
++	qcom,ath11k-fw-memory-mode = <2>;
++};
++
++&wifi1 {
++	status = "okay";
++
++	// QCN6102 5 GHz
++	qcom,rproc = <&q6v5_wcss>;
++	qcom,ath11k-calibration-variant = "Xiaomi-Redmi-AX3000";
++	qcom,ath11k-fw-memory-mode = <2>;
++	ieee80211-freq-limit = <5150000 5850000>;
++
++	memory-region = <&q6_region_qcn6122_1>, <&q6_region_ipq5018>, <&m3_dump_qcn6122_1>;
++	memory-region-names = "q6-region", "m3-region", "m3-dump";
++};
++
++/* 256 MB board: NSS heap 8 MiB, as on the other QCN6122 256 MB boards */
++&nss_region {
++	reg = <0x0 0x40000000 0x0 0x800000>;
++};
+diff --git a/target/linux/qualcommax/image/ipq50xx.mk b/target/linux/qualcommax/image/ipq50xx.mk
+index 067d2a5..443cade 100644
+--- a/target/linux/qualcommax/image/ipq50xx.mk
++++ b/target/linux/qualcommax/image/ipq50xx.mk
+@@ -253,6 +253,30 @@ define Device/xiaomi_cr8806
+ endef
+ TARGET_DEVICES += xiaomi_cr8806
+ 
++define Device/xiaomi_redmi-ax3000
++	$(call Device/FitImage)
++	$(call Device/UbiFit)
++	DEVICE_VENDOR := Xiaomi
++	DEVICE_MODEL := Redmi AX3000
++	DEVICE_VARIANT := (RA81)
++	DEVICE_DTS_CONFIG := config@mp02.1
++	SOC := ipq5018
++	BLOCKSIZE := 128k
++	PAGESIZE := 2048
++	NAND_SIZE := 128m
++	# One dual-boot slot ("rootfs"/"rootfs_1") is 36 MiB; leave room
++	# for the UBI overhead and a usable rootfs_data volume.
++	IMAGE_SIZE := 30720k
++	SUPPORTED_DEVICES += redmi,ax3000
++	# No USB port and NAND-only storage on this board
++	DEVICE_PACKAGES := \
++		ath11k-firmware-ipq5018-qcn6122 \
++		ipq-wifi-xiaomi_redmi-ax3000 \
++		-kmod-usb3 -kmod-usb-dwc3 -kmod-usb-dwc3-qcom \
++		-e2fsprogs -kmod-fs-ext4 -losetup
++endef
++TARGET_DEVICES += xiaomi_redmi-ax3000
++
+ define Device/glinet_gl-x2000
+ 	$(call Device/FitImage)
+ 	DEVICE_VENDOR := GL.iNet
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
+index 0bec5b6..33f960a 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
+@@ -58,6 +58,9 @@ tplink,archer-ax58-v2)
+ xiaomi,cr8806)
+ 	ucidef_set_led_netdev "internet-blue" "INTERNET-BLUE" "blue:wan" "wan" "link"
+ 	;;
++xiaomi,redmi-ax3000)
++	ucidef_set_led_netdev "internet-blue" "INTERNET-BLUE" "blue:wan" "wan" "link"
++	;;
+ xiaomi,redmi-ax5400)
+ 	ucidef_set_led_netdev "wan-port-link-top-blue" "WAN-PORT-LINK-TOP-BLUE" "blue:wan" "wan" "link_1000"
+ 	ucidef_set_led_netdev "wan-port-link-top-yellow" "WAN-PORT-LINK-TOP-YELLOW" "yellow:wan" "wan" "link_10 link_100"
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
+index 841e4dd..7b9fafa 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
+@@ -38,7 +38,8 @@ ipq50xx_setup_interfaces()
+ 	linksys,mx5500|\
+ 	linksys,spnmx56|\
+ 	mercusys,mr80x-v2|\
+-	xiaomi,ax6000)
++	xiaomi,ax6000|\
++	xiaomi,redmi-ax3000)
+ 		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3" "wan"
+ 		;;
+ 	xiaomi,mi-router-ax3000t-v2)
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
+index 2a5800c..915fe93 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
+@@ -133,6 +133,7 @@ case "$FIRMWARE" in
+ 	xiaomi,mi-router-ax3000t-v2|\
+ 	xiaomi,ax6000|\
+ 	xiaomi,cr8806|\
++	xiaomi,redmi-ax3000|\
+ 	xiaomi,redmi-ax5400)
+ 		caldata_extract "0:art" 0x1000 0x20000
+ 		;;
+@@ -257,7 +258,8 @@ case "$FIRMWARE" in
+ 	xiaomi,mi-router-ax3000t-v2)
+ 		caldata_extract "0:art" 0x26800 0x20000
+ 		;;
+-	xiaomi,cr8806)
++	xiaomi,cr8806|\
++	xiaomi,redmi-ax3000)
+ 		caldata_extract "0:art" 0x26800 0x20000
+ 		;;
+ 	yuncore,ax830)
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot b/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot
+new file mode 100755
+index 0000000..2343293
+--- /dev/null
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot
+@@ -0,0 +1,12 @@
++#!/bin/sh /etc/rc.common
++
++START=99
++
++boot() {
++	case $(board_name) in
++	xiaomi,redmi-ax3000)
++		. /lib/functions/xiaomi-dualboot.sh
++		xiaomi_dualboot_confirm
++		;;
++	esac
++}
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/uci-defaults/15_cr8806_ecm_gro_list b/target/linux/qualcommax/ipq50xx/base-files/etc/uci-defaults/15_cr8806_ecm_gro_list
+index 54982e6..687cb71 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/uci-defaults/15_cr8806_ecm_gro_list
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/uci-defaults/15_cr8806_ecm_gro_list
+@@ -6,7 +6,10 @@
+ 
+ . /lib/functions.sh
+ 
+-[ "$(board_name)" = "xiaomi,cr8806" ] || exit 0
++case "$(board_name)" in
++xiaomi,cr8806|xiaomi,redmi-ax3000) ;;
++*) exit 0 ;;
++esac
+ uci -q get ecm.general > /dev/null || exit 0
+ 
+ uci -q set ecm.general.disable_gro_list='1'
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/functions/xiaomi-dualboot.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/functions/xiaomi-dualboot.sh
+new file mode 100644
+index 0000000..6f21127
+--- /dev/null
++++ b/target/linux/qualcommax/ipq50xx/base-files/lib/functions/xiaomi-dualboot.sh
+@@ -0,0 +1,89 @@
++# Helpers for the dual-boot scheme of the Xiaomi "bootmiwifi" U-Boot,
++# which boots the "kernel" UBI volume of either the "rootfs" (slot 0) or
++# the "rootfs_1" (slot 1) MTD partition and passes ubi.mtd=<partition>.
++#
++# Slot selection, as implemented by the Redmi AX3000 (RA81) U-Boot:
++#  - flag_ota_reboot=1: boot slot (1 - flag_last_success), unless
++#    flag_boot_success exists and is 0, in which case the previous attempt
++#    failed: roll back to flag_last_success and clear flag_ota_reboot.
++#  - otherwise: boot flag_last_success, or the other slot when its
++#    flag_try_sys<1|2>_failed is set.
++#  - An image that cannot be booted sets flag_try_sys<N>_failed=1, clears
++#    flag_ota_reboot and resets the board.
++#
++# U-Boot never writes flag_boot_success, so a system booted for a trial
++# arms it (0) early in preinit and confirms it (1) once boot has completed.
++
++. /lib/functions.sh
++
++XIAOMI_DUALBOOT_FW_ENV=/tmp/xiaomi-dualboot.fw_env.config
++
++xiaomi_dualboot_slot() {
++	case "$(sed -n 's/.*ubi\.mtd=\([^ ]*\).*/\1/p' /proc/cmdline)" in
++	rootfs)
++		echo 0
++		;;
++	rootfs_1)
++		echo 1
++		;;
++	*)
++		return 1
++		;;
++	esac
++}
++
++# Use a private fw_env config so that this also works in preinit and in
++# the sysupgrade ramfs, before/without /etc/fw_env.config.
++xiaomi_dualboot_fw_env() {
++	local mtdidx
++
++	[ -s "$XIAOMI_DUALBOOT_FW_ENV" ] && return 0
++
++	mtdidx=$(find_mtd_index "0:appsblenv")
++	[ -n "$mtdidx" ] || return 1
++
++	mkdir -p /var/lock
++	echo "/dev/mtd$mtdidx 0x0 0x10000 0x20000" > "$XIAOMI_DUALBOOT_FW_ENV"
++}
++
++xiaomi_dualboot_getenv() {
++	xiaomi_dualboot_fw_env || return 1
++	fw_printenv -c "$XIAOMI_DUALBOOT_FW_ENV" -n "$1" 2>/dev/null
++}
++
++# Every argument is one "name [value]" line; a bare name deletes the variable.
++xiaomi_dualboot_setenv() {
++	local script=/tmp/xiaomi-dualboot.fw_setenv
++
++	xiaomi_dualboot_fw_env || return 1
++	printf '%s\n' "$@" > "$script"
++	fw_setenv -c "$XIAOMI_DUALBOOT_FW_ENV" -s "$script"
++}
++
++# Called from preinit: if U-Boot is trying this slot after an upgrade,
++# make it roll back on the next boot unless this one completes.
++xiaomi_dualboot_arm() {
++	[ "$(xiaomi_dualboot_getenv flag_ota_reboot)" = 1 ] || return 0
++	[ "$(xiaomi_dualboot_getenv flag_boot_success)" = 0 ] && return 0
++
++	xiaomi_dualboot_setenv "flag_boot_success 0"
++}
++
++# Called once boot has completed: make the running slot the default.
++xiaomi_dualboot_confirm() {
++	local slot
++
++	slot=$(xiaomi_dualboot_slot) || return 1
++
++	[ "$(xiaomi_dualboot_getenv flag_ota_reboot)" != 1 ] && \
++	[ "$(xiaomi_dualboot_getenv flag_last_success)" = "$slot" ] && \
++	[ "$(xiaomi_dualboot_getenv flag_boot_success)" = 1 ] && \
++		return 0
++
++	xiaomi_dualboot_setenv \
++		"flag_last_success $slot" \
++		"flag_ota_reboot 0" \
++		"flag_boot_success 1" \
++		"flag_try_sys1_failed 0" \
++		"flag_try_sys2_failed 0"
++}
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/preinit/81_xiaomi_dualboot b/target/linux/qualcommax/ipq50xx/base-files/lib/preinit/81_xiaomi_dualboot
+new file mode 100644
+index 0000000..69f7252
+--- /dev/null
++++ b/target/linux/qualcommax/ipq50xx/base-files/lib/preinit/81_xiaomi_dualboot
+@@ -0,0 +1,11 @@
++. /lib/functions/xiaomi-dualboot.sh
++
++preinit_xiaomi_dualboot_arm() {
++	case $(board_name) in
++	xiaomi,redmi-ax3000)
++		xiaomi_dualboot_arm
++		;;
++	esac
++}
++
++boot_hook_add preinit_main preinit_xiaomi_dualboot_arm
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
+index 9a78cfa..0528f9d 100644
+--- a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
++++ b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
+@@ -538,6 +538,9 @@ platform_do_upgrade() {
+ 		remove_oem_ubi_volume wifi_fw
+ 		nand_do_upgrade "$1"
+ 		;;
++	xiaomi,redmi-ax3000)
++		xiaomi_dualboot_do_upgrade "$1"
++		;;
+ 	xiaomi,cr8806)
+ 		# Keep the stock dual-boot layout: upgrade the slot we are
+ 		# running from and leave the other slot untouched.
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/xiaomi-dualboot.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/xiaomi-dualboot.sh
+new file mode 100644
+index 0000000..2515ecc
+--- /dev/null
++++ b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/xiaomi-dualboot.sh
+@@ -0,0 +1,31 @@
++. /lib/functions/xiaomi-dualboot.sh
++
++# Flash the slot that is not running, then let U-Boot try it once. The
++# running system stays untouched as the fallback.
++xiaomi_dualboot_do_upgrade() {
++	local slot
++
++	slot=$(xiaomi_dualboot_slot) || {
++		v "Unable to determine the running slot from /proc/cmdline"
++		nand_do_upgrade_failed
++	}
++
++	if [ "$slot" = 0 ]; then
++		CI_UBIPART="rootfs_1"
++	else
++		CI_UBIPART="rootfs"
++	fi
++	v "Running from slot $slot, flashing $CI_UBIPART"
++
++	nand_do_flash_file "$1" || nand_do_upgrade_failed
++
++	# Only switch slots once the new one has been written completely.
++	xiaomi_dualboot_setenv \
++		"flag_try_sys1_failed 0" \
++		"flag_try_sys2_failed 0" \
++		"flag_last_success $slot" \
++		"flag_boot_success" \
++		"flag_ota_reboot 1" || nand_do_upgrade_failed
++
++	nand_do_upgrade_success
++}
+diff --git a/target/linux/qualcommax/ipq50xx/config-default b/target/linux/qualcommax/ipq50xx/config-default
+index 0517c1b..9485b2b 100644
+--- a/target/linux/qualcommax/ipq50xx/config-default
++++ b/target/linux/qualcommax/ipq50xx/config-default
+@@ -34,7 +34,3 @@ CONFIG_QCOM_TMEL_QMP_MAILBOX=y
+ CONFIG_SPI_QPIC_SNAND=y
+ CONFIG_STMMAC_ETH=y
+ CONFIG_STMMAC_PLATFORM=y
+-CONFIG_MAGIC_SYSRQ_SERIAL=y
+-CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1b6
+-CONFIG_DEVMEM=y
+-# CONFIG_STRICT_DEVMEM is not set
+-- 
+2.56.0
+

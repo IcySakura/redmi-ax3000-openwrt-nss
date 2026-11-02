@@ -1,0 +1,149 @@
+name: Build firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      profiles:
+        description: "Profiles to build (space-separated names from profiles/)"
+        type: string
+        default: "default mesh"
+      release:
+        description: "Publish the images as a GitHub Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    steps:
+      - name: Free disk space
+        run: |
+          # A full build needs about 26 GB (build_dir, dl, staging_dir, toolchain).
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h / | tail -1
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bzip2 g++ gawk gcc git libncurses-dev make rsync file unzip wget zstd \
+            python3-venv device-tree-compiler squashfs-tools binutils
+
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Validate profile names
+        env:
+          PROFILES: ${{ inputs.profiles }}
+        run: |
+          for p in $PROFILES; do
+            case "$p" in *[!A-Za-z0-9._-]*) echo "::error::bad profile name: $p"; exit 1 ;; esac
+            [ -f "profiles/$p.packages" ] || { echo "::error::no profiles/$p.packages"; exit 1; }
+          done
+
+      - name: Restore download cache
+        uses: actions/cache@v4
+        with:
+          path: build/dl
+          key: dl-${{ hashFiles('upstream/*', 'configs/*', 'profiles/*') }}-${{ github.run_id }}
+          restore-keys: |
+            dl-${{ hashFiles('upstream/*', 'configs/*', 'profiles/*') }}-
+            dl-
+
+      - name: Build
+        env:
+          PROFILES: ${{ inputs.profiles }}
+        run: |
+          args=()
+          for p in $PROFILES; do args+=(--profile "$p"); done
+          scripts/build.sh -j "$(nproc)" "${args[@]}"
+
+      - name: Collect release assets
+        id: assets
+        env:
+          PROFILES: ${{ inputs.profiles }}
+        run: |
+          mkdir -p release
+          for p in $PROFILES; do
+            for f in out/"$p"/*xiaomi_redmi-ax3000*; do
+              name=$(basename "$f")
+              cp "$f" "release/${name/xiaomi_redmi-ax3000/xiaomi_redmi-ax3000-$p}"
+            done
+            cp "out/$p/config.full" "release/config-$p.txt"
+          done
+          (cd release && sha256sum -- * | sort -k2) > sha256sums
+          mv sha256sums release/
+          cat release/sha256sums
+          echo "tag=ra81-nss-$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign checksums
+        env:
+          USIGN_SECRET_KEY: ${{ secrets.USIGN_SECRET_KEY }}
+        run: |
+          if [ -z "$USIGN_SECRET_KEY" ]; then
+            echo "::warning::USIGN_SECRET_KEY is not set; the release will not be signed"
+            exit 0
+          fi
+          umask 077
+          printf '%s\n' "$USIGN_SECRET_KEY" > "$RUNNER_TEMP/release.sec"
+          build/openwrt/staging_dir/host/bin/usign -S -m release/sha256sums -s "$RUNNER_TEMP/release.sec"
+          rm -f "$RUNNER_TEMP/release.sec"
+          build/openwrt/staging_dir/host/bin/usign -V -m release/sha256sums -p keys/release.pub
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: ra81-nss-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+
+      - name: Create release
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.assets.outputs.tag }}
+          PROFILES: ${{ inputs.profiles }}
+        run: |
+          {
+            echo "OpenWrt with NSS offload for the Xiaomi Redmi AX3000 (**RA81 only**), built from ${GITHUB_SHA::7}."
+            echo
+            echo "Upstream tree: \`$(. upstream/openwrt.conf; echo "$OPENWRT_URL @ ${OPENWRT_COMMIT::12}")\`"
+            echo
+            echo "Profiles: $PROFILES (see \`profiles/\`). Each profile has its own images:"
+            echo
+            echo "| File | Use |"
+            echo "|---|---|"
+            echo "| \`*-<profile>-squashfs-sysupgrade.bin\` | upgrade a router already running this firmware (\`sysupgrade\`) |"
+            echo "| \`*-<profile>-squashfs-factory.ubi\` | first install into a dual-boot slot (see the README) |"
+            echo "| \`*-<profile>-initramfs-uImage.itb\` | RAM boot via U-Boot TFTP (UART) |"
+            echo
+            if [ -f release/sha256sums.sig ]; then
+              echo "\`sha256sums\` is signed with the key in \`keys/release.pub\` (\`usign -V -m sha256sums -p release.pub\`)."
+            else
+              echo "This release is **not signed**."
+            fi
+            echo
+            echo "Experimental firmware - read the README (install, recovery, limitations) before flashing."
+            echo
+            echo '```'
+            cat release/sha256sums
+            echo '```'
+          } > notes.md
+          gh release create "$TAG" release/* \
+            --target "$GITHUB_SHA" \
+            --title "RA81 NSS $TAG" \
+            --prerelease \
+            --notes-file notes.md

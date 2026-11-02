@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Myles Liu <lyx981mike@gmail.com>
+Date: Mon, 2 Nov 2026 09:25:45 -0800
+Subject: [PATCH 2/2] qualcommax: ipq50xx: redmi-ax3000: enable TSENS
+
+The driver enables TSENS itself on IPQ5018 (init_tsens_v1_no_rpm), so the
+"not enabled by the boot firmware" reason for keeping it off no longer
+applies. Measured on the RA81 with NSS and Wi-Fi offload under full load:
+48-53 C on all four zones, smooth, no bogus readings (tested first with the
+critical trips demoted to hot). Keep the upstream trip points.
+---
+ target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
+index 1109e40..56851b4 100644
+--- a/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
++++ b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
+@@ -109,13 +109,14 @@
+ };
+ 
+ /*
+- * TSENS is not enabled by the boot firmware on this IPQ5000 ("tsens
+- * device is not enabled" with the vendor kernel) and some of its zones
+- * report bogus critical temperatures, which shuts the board down early
+- * in boot - before the dual-boot rollback is armed. Keep it off.
++ * TSENS: the boot firmware leaves it disabled on this IPQ5000, but the
++ * driver enables it itself (init_tsens_v1_no_rpm, no RPM on IPQ5018).
++ * Measured on an RA81 with NSS + Wi-Fi offload: 48-53 C idle to full load
++ * on all four zones, smooth (<= 2 C per 2 s), no bogus readings. Keep the
++ * upstream trips (CPU passive 100 C, critical 120 C).
+  */
+ &tsens {
+-	status = "disabled";
++	status = "okay";
+ };
+ 
+ &sleep_clk {
+-- 
+2.56.0
+

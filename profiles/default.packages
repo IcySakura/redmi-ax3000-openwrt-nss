@@ -1,0 +1,8 @@
+# Package profile: one package per line, added on top of configs/ra81-nss.config.
+#   name        build the package into the image
+#   -name       leave a package that would otherwise be included out of the image
+# Packages must come from a feed in upstream/feeds.conf. The build fails if a
+# listed package does not end up in the image (unknown name, missing feed,
+# unmet dependency), so an upgrade never drops software silently.
+#
+# The default profile adds nothing.

@@ -1,0 +1,6 @@
+# Mesh-capable image: full wpad (802.11s with SAE, plus 802.11r/k/v) and
+# batman-adv. Nothing is configured; the packages are only available.
+-wpad-basic-mbedtls
+wpad-mesh-mbedtls
+kmod-batman-adv
+batctl-default

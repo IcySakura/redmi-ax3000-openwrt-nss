@@ -1,0 +1,43 @@
+#!/bin/sh
+# EXAMPLE first-boot profile for a bridged access point ("dumb AP") behind an
+# existing router. Edit the addresses below, then build with
+#   scripts/build.sh --overlay overlays/examples/access-point
+# Only needed for a fresh install: a sysupgrade keeps the router's own settings.
+#
+# Result: static LAN address in the main router's subnet, gateway/DNS = main
+# router, no DHCP/RA/DNS server of its own, the WAN port bridged into br-lan as
+# a fourth LAN port, no own IPv6 prefix. Wi-Fi is left at the OpenWrt defaults
+# (disabled).
+
+AP_IPADDR=192.168.1.2
+AP_NETMASK=255.255.255.0
+GATEWAY=192.168.1.1
+
+brdev=$(uci -q show network | sed -n "s/^network\.\([^.]*\)\.name='br-lan'$/\1/p" | head -n1)
+
+uci -q batch <<UCI
+set network.lan.ipaddr='$AP_IPADDR'
+set network.lan.netmask='$AP_NETMASK'
+set network.lan.gateway='$GATEWAY'
+delete network.lan.dns
+add_list network.lan.dns='$GATEWAY'
+delete network.lan.ip6assign
+delete network.globals.ula_prefix
+set network.wan.disabled='1'
+set network.wan6.disabled='1'
+set dhcp.lan.ignore='1'
+set dhcp.lan.dhcpv6='disabled'
+set dhcp.lan.ra='disabled'
+UCI
+
+if [ -n "$brdev" ]; then
+	uci -q del_list network."$brdev".ports='wan'
+	uci -q add_list network."$brdev".ports='wan'
+fi
+
+uci commit network
+uci commit dhcp
+
+/etc/init.d/dnsmasq disable
+/etc/init.d/odhcpd disable
+exit 0

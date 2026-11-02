@@ -1,0 +1,131 @@
+#!/bin/bash
+# Reproducible build of OpenWrt with NSS offload for the Xiaomi Redmi AX3000 (RA81).
+#
+#   scripts/build.sh [-j N] [--clean] [--profile NAME]... [--overlay DIR]...
+#
+# Fetches the pinned upstream tree (upstream/openwrt.conf) into $SRC, applies
+# patches/*.patch, pins the feeds (upstream/feeds.conf), then builds one image
+# per profile (profiles/NAME.packages, default: "default") in the same tree, so
+# every profile after the first is an incremental build. Each profile gets
+# overlays/common plus any --overlay directories as the image's "files/".
+#
+# Results: $OUT/<profile>/ (images, manifest, config, sha256sums), validated
+# with tools/validate-images.sh.
+#
+# Environment: SRC (default build/openwrt), DL_DIR (default build/dl),
+# OUT (default out), VENV (default build/venv-tools).
+set -euo pipefail
+
+# Parse the whole script before running it, so editing it mid-build is safe.
+{
+
+TOP=$(cd "$(dirname "$0")/.." && pwd)
+SRC=${SRC:-$TOP/build/openwrt}
+DL_DIR=${DL_DIR:-$TOP/build/dl}
+OUT=${OUT:-$TOP/out}
+export VENV=${VENV:-$TOP/build/venv-tools}
+JOBS=$(nproc)
+CLEAN=
+PROFILES=()
+OVERLAYS=()
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-j) JOBS=$2; shift ;;
+	-j*) JOBS=${1#-j} ;;
+	--clean) CLEAN=1 ;;
+	--profile) PROFILES+=("$2"); shift ;;
+	--overlay) OVERLAYS+=("$(cd "$2" && pwd)"); shift ;;
+	*) echo "usage: $0 [-j N] [--clean] [--profile NAME]... [--overlay DIR]..." >&2; exit 2 ;;
+	esac
+	shift
+done
+[ ${#PROFILES[@]} -gt 0 ] || PROFILES=(default)
+for p in "${PROFILES[@]}"; do
+	[ -f "$TOP/profiles/$p.packages" ] || { echo "no such profile: profiles/$p.packages" >&2; exit 2; }
+done
+
+# OpenWrt's host tools trip over unusual PATH entries (e.g. the Windows
+# directories WSL appends, which contain spaces); use the system ones only.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+. "$TOP/upstream/openwrt.conf"
+REPO_COMMIT=$(git -C "$TOP" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+
+# --- Source tree --------------------------------------------------------------
+if [ ! -d "$SRC/.git" ]; then
+	mkdir -p "$SRC"
+	git -C "$SRC" init -q
+	git -C "$SRC" remote add origin "$OPENWRT_URL"
+fi
+
+cd "$SRC"
+STAMP=$( (echo "$OPENWRT_URL $OPENWRT_COMMIT"; cat "$TOP"/patches/*.patch "$TOP/upstream/feeds.conf") | sha256sum | cut -d' ' -f1)
+if [ "$(cat .ra81-nss-stamp 2>/dev/null)" != "$STAMP" ] || [ -n "$CLEAN" ]; then
+	echo ">>> Checking out $OPENWRT_COMMIT and applying patches"
+	git fetch -q --depth 1 origin "$OPENWRT_COMMIT"
+	git checkout -q -f --detach "$OPENWRT_COMMIT"
+	git clean -q -fd -- target package
+	git -c user.name=ra81-nss-build -c user.email=ra81-nss-build@localhost \
+		am -q --keep-cr "$TOP"/patches/*.patch
+	cp "$TOP/upstream/feeds.conf" feeds.conf
+	# A patch touches package/kernel/mac80211/ath.mk, which the package
+	# metadata cache does not track: drop the cache so defconfig sees it.
+	rm -rf tmp/info
+	echo "$STAMP" > .ra81-nss-stamp
+fi
+
+mkdir -p "$DL_DIR"
+[ -e dl ] || ln -s "$DL_DIR" dl
+
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+if [ ! -x "$VENV/bin/ubireader_extract_images" ]; then
+	python3 -m venv "$VENV"
+	"$VENV/bin/pip" install --quiet ubi_reader
+fi
+
+# --- One image per profile ------------------------------------------------------
+BIN=bin/targets/qualcommax/ipq50xx
+for PROFILE in "${PROFILES[@]}"; do
+	echo ">>> Profile $PROFILE"
+
+	rm -rf files
+	mkdir -p files/etc/ra81-nss
+	cp -a "$TOP/overlays/common/." files/
+	for o in "${OVERLAYS[@]}"; do cp -a "$o/." files/; done
+	cp "$TOP/profiles/$PROFILE.packages" files/etc/ra81-nss/profile.packages
+	cat > files/etc/ra81-nss/build-info <<-EOF
+		PROFILE=$PROFILE
+		REPO_COMMIT=$REPO_COMMIT
+		UPSTREAM_COMMIT=$OPENWRT_COMMIT
+		BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	EOF
+
+	cp "$TOP/configs/ra81-nss.config" .config
+	"$TOP/scripts/profile.sh" apply "$TOP/profiles/$PROFILE.packages" .config
+	make defconfig >/dev/null
+	# defconfig drops a symbol it cannot select without a word; here that is an error
+	dropped=$(grep -E '^CONFIG_[A-Za-z0-9_-]+=' "$TOP/configs/ra81-nss.config" | while read -r l; do
+		grep -qxF "$l" .config || echo "$l"; done)
+	[ -z "$dropped" ] || { echo "defconfig dropped from configs/ra81-nss.config:" >&2; echo "$dropped" >&2; exit 1; }
+	"$TOP/scripts/profile.sh" check "$TOP/profiles/$PROFILE.packages" .config
+
+	rm -f "$BIN"/*xiaomi_redmi-ax3000*
+	make -j"$JOBS" download
+	make -j"$JOBS" || make -j1 V=s
+
+	dest=$OUT/$PROFILE
+	rm -rf "$dest"
+	mkdir -p "$dest"
+	cp "$BIN"/*xiaomi_redmi-ax3000* "$BIN"/profiles.json "$dest"/
+	cp .config "$dest/config.full"
+	cp files/etc/ra81-nss/build-info "$dest/build-info"
+	(cd "$dest" && sha256sum -- *xiaomi_redmi-ax3000* > sha256sums)
+
+	"$TOP/tools/validate-images.sh" "$dest"
+	echo ">>> Images in $dest"
+done
+exit 0
+}
