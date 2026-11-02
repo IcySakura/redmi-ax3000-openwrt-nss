@@ -74,7 +74,8 @@ EOF
 D=$WORK/board.dts
 dtc -I dtb -O dts -o "$D" "$WORK/board.dtb" 2>/dev/null
 check "model Xiaomi Redmi AX3000" "grep -q 'model = \"Xiaomi Redmi AX3000\"' '$D'"
-check "compatible xiaomi,redmi-ax3000" "grep -q 'compatible = \"xiaomi,redmi-ax3000\"' '$D'"
+# dtc < 1.8 prints string lists as "a\0b" rather than "a", "b"
+check "compatible xiaomi,redmi-ax3000" "grep -Eq 'compatible = \"xiaomi,redmi-ax3000(\"|\\\\0)' '$D'"
 check "bootargs-append root=/dev/ubiblock0_1" "grep -q 'bootargs-append = \" root=/dev/ubiblock0_1' '$D'"
 check "smem partitions with 0:art node" "grep -q 'label = \"0:art\"' '$D'"
 check "NAND ECC strength 8" "grep -q 'nand-ecc-strength = <0x08>' '$D'"
