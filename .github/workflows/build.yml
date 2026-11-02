@@ -98,7 +98,10 @@ jobs:
             exit 0
           fi
           umask 077
-          printf '%s\n' "$USIGN_SECRET_KEY" > "$RUNNER_TEMP/release.sec"
+          # Accept the whole key file or just its base64 line; usign
+          # always skips the first line as a comment.
+          key=$(printf '%s\n' "$USIGN_SECRET_KEY" | tr -d '\r' | grep -v '^untrusted comment:' | tr -d ' \n')
+          printf 'untrusted comment: release key\n%s\n' "$key" > "$RUNNER_TEMP/release.sec"
           build/openwrt/staging_dir/host/bin/usign -S -m release/sha256sums -s "$RUNNER_TEMP/release.sec"
           rm -f "$RUNNER_TEMP/release.sec"
           build/openwrt/staging_dir/host/bin/usign -V -m release/sha256sums -p keys/release.pub
