@@ -274,7 +274,7 @@ Every image is built from three layers:
 | Layer | File | Contents |
 |---|---|---|
 | Base | `configs/ra81-nss.config` | OpenWrt with LuCI, the NSS offload stack (NSS firmware and drivers, ECM, ath11k with NSS offload, PPPoE acceleration) and the RA81 board support |
-| Every profile | `configs/base.packages` | `ra81-ota`, `luci-app-ra81-ota` (the [firmware updater](#firmware-updates)) |
+| Every profile | `configs/base.packages` | `ra81-ota`, `luci-app-ra81-ota` (the [firmware updater](#firmware-updates)), `luci-theme-footstrap` (the default LuCI theme: a router still on Bootstrap switches to it once, a theme you chose stays) |
 | One profile | `profiles/<name>.packages` | what that profile adds or leaves out |
 
 The profiles in this repository:
@@ -447,7 +447,7 @@ configs/ra81-nss.config  base build configuration (diffconfig)
 configs/base.packages    packages in every profile (the firmware updater)
 profiles/                package profiles (*.packages)
 feeds/ra81/              this repository's packages: ra81-ota, luci-app-ra81-ota
-overlays/common/         files in every image (memory tuning)
+overlays/common/         files in every image (memory tuning, default theme switch)
 overlays/examples/       optional first-boot examples (bridged access point)
 scripts/build.sh         reproducible build of one or more profiles
 scripts/bump-upstream.sh move upstream/ to a release of the upstream tree

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Footstrap is this firmware's default LuCI theme. Switch to it once, and only
+# from plain Bootstrap (OpenWrt's default): a theme chosen otherwise stays.
+# Runs after the themes' own uci-defaults (30_luci-theme-*).
+
+[ -d /www/luci-static/footstrap ] || exit 0
+[ "$(uci -q get luci.main.footstrap_default)" = 1 ] && exit 0
+
+case "$(uci -q get luci.main.mediaurlbase)" in
+""|/luci-static/bootstrap)
+	uci set luci.main.mediaurlbase=/luci-static/footstrap
+	;;
+esac
+uci set luci.main.footstrap_default=1
+uci commit luci
+exit 0

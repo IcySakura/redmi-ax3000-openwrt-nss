@@ -7,3 +7,8 @@
 #   -ra81-ota
 ra81-ota
 luci-app-ra81-ota
+
+# LuCI theme: Footstrap (official LuCI theme), made the default once on
+# routers still on Bootstrap (overlays/common/etc/uci-defaults/99-default-theme).
+# To build without it: "-luci-theme-footstrap" in your profile.
+luci-theme-footstrap
