@@ -51,8 +51,10 @@ for p in "${PROFILES[@]}"; do
 done
 
 # OpenWrt's host tools trip over unusual PATH entries (e.g. the Windows
-# directories WSL appends, which contain spaces); use the system ones only.
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# directories WSL appends, which contain spaces): drop those, keep the rest
+# (some distributions keep host tools such as pod2man outside /usr/bin).
+PATH=$(echo "$PATH" | tr ':' '\n' | grep -v -e '^/mnt/' -e ' ' | paste -sd: -)
+export PATH=${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
 
 . "$TOP/upstream/openwrt.conf"
 REPO_COMMIT=$(git -C "$TOP" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
