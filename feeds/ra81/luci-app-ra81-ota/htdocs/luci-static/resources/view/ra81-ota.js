@@ -54,6 +54,9 @@ function renderDetails(d, brief) {
 		return [ E('p', {}, [ _('This release carries no version information (it predates it).'), ' ',
 			link(d.url, _('Read its release notes on GitHub.')) ]) ];
 
+	if (d.compared_with == 'unknown')
+		nodes.push(E('p', {}, _('The running firmware predates version tracking: the sources below are those of the release, and its packages are compared with the ones installed now.')));
+
 	if (d.sources.length)
 		nodes.push(E('h5', {}, _('Sources')), table([ _('Source'), _('Change') ], d.sources.map(function(c) {
 			var change = c.from ? '%s → %s'.format(c.from, c.to) : _('new (%s)').format(c.to);
