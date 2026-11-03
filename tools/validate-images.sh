@@ -121,6 +121,9 @@ if [ -e "$R/usr/sbin/ra81-ota" ]; then
 		echo "  NOTE no OTA_REPO in build-info: set ra81-ota.main.repo on the router"
 fi
 
+# Package sources must all exist on downloads.openwrt.org (apk update fails otherwise)
+check "package sources: only feeds OpenWrt publishes" "! grep -E '^https?://' '$R/etc/apk/repositories.d/distfeeds.list' | grep -vqE '/(targets/[^/]+/[^/]+/packages|packages/[^/]+/(base|packages|luci|routing|telephony|video))/packages\\.adb\$'"
+
 echo "== sysupgrade.bin"
 if [ -s "$SYSUPG" ]; then
 	tar tf "$SYSUPG" > "$WORK/tar.txt" 2>/dev/null
