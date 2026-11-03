@@ -7,10 +7,19 @@ on:
         description: "Profiles to build (space-separated names from profiles/)"
         type: string
         default: "default mesh"
-      release:
-        description: "Publish the images as a GitHub Release"
-        type: boolean
-        default: true
+      upstream:
+        description: "Upstream tree: the pinned release, or the newest upstream release"
+        type: choice
+        options: [pinned, latest]
+        default: pinned
+      publish:
+        description: "Publish as a release on this channel"
+        type: choice
+        options: [testing, stable, none]
+        default: testing
+  schedule:
+    # Daily: build and publish to "testing" when upstream has a new release.
+    - cron: "17 5 * * *"
 
 permissions:
   contents: read
@@ -19,13 +28,71 @@ concurrency:
   group: build
   cancel-in-progress: false
 
+env:
+  # A scheduled run has no inputs: use the defaults
+  PROFILES: ${{ inputs.profiles || 'default mesh' }}
+  UPSTREAM: ${{ inputs.upstream || 'latest' }}
+  PUBLISH: ${{ inputs.publish || 'testing' }}
+
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      changed: ${{ steps.bump.outputs.changed }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          for p in $PROFILES; do
+            case "$p" in *[!A-Za-z0-9._-]*) echo "::error::bad profile name: $p"; exit 1 ;; esac
+            [ -f "profiles/$p.packages" ] || { echo "::error::no profiles/$p.packages"; exit 1; }
+          done
+
+      - name: Look for a new upstream release
+        id: bump
+        if: env.UPSTREAM == 'latest'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          scripts/bump-upstream.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Decide
+        id: plan
+        env:
+          CHANGED: ${{ steps.bump.outputs.changed }}
+        run: |
+          # A scheduled run only builds when upstream moved
+          if [ "${{ github.event_name }}" = schedule ] && [ "$CHANGED" != true ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing new upstream; not building." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=ra81-nss-$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Hand the pins to the build
+        if: steps.plan.outputs.build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-pins
+          path: upstream/
+          retention-days: 7
+
   build:
     name: Build
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
       contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
     steps:
       - name: Free disk space
         run: |
@@ -45,14 +112,11 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Validate profile names
-        env:
-          PROFILES: ${{ inputs.profiles }}
-        run: |
-          for p in $PROFILES; do
-            case "$p" in *[!A-Za-z0-9._-]*) echo "::error::bad profile name: $p"; exit 1 ;; esac
-            [ -f "profiles/$p.packages" ] || { echo "::error::no profiles/$p.packages"; exit 1; }
-          done
+      - name: Use the planned pins
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-pins
+          path: upstream/
 
       - name: Restore download cache
         uses: actions/cache@v4
@@ -63,24 +127,17 @@ jobs:
             dl-${{ hashFiles('upstream/*', 'configs/*', 'profiles/*') }}-
             dl-
 
-      - name: Name the release
-        id: tag
-        run: echo "tag=ra81-nss-$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-
       - name: Build
         env:
-          PROFILES: ${{ inputs.profiles }}
           # recorded in the images' /etc/ra81-nss/build-info for the updater
           OTA_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.release && steps.tag.outputs.tag || '' }}
+          RELEASE_TAG: ${{ env.PUBLISH != 'none' && needs.plan.outputs.tag || '' }}
         run: |
           args=()
           for p in $PROFILES; do args+=(--profile "$p"); done
           scripts/build.sh -j "$(nproc)" "${args[@]}"
 
       - name: Collect release assets
-        env:
-          PROFILES: ${{ inputs.profiles }}
         run: |
           mkdir -p release
           for p in $PROFILES; do
@@ -119,22 +176,22 @@ jobs:
           if-no-files-found: error
 
       - name: Create release
-        if: inputs.release
+        if: env.PUBLISH != 'none'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-          PROFILES: ${{ inputs.profiles }}
         run: |
+          . upstream/openwrt.conf
+          repo=${OPENWRT_URL#https://github.com/}; repo=${repo%.git}
           {
             echo "OpenWrt with NSS offload for the Xiaomi Redmi AX3000 (**RA81 only**), built from ${GITHUB_SHA::7}."
             echo
-            echo "Upstream tree: \`$(. upstream/openwrt.conf; echo "$OPENWRT_URL @ ${OPENWRT_COMMIT::12}")\`"
-            echo
-            echo "Profiles: $PROFILES (see \`profiles/\`). Each profile has its own images:"
+            echo "- Channel: **$PUBLISH**"
+            echo "- Upstream: [\`$OPENWRT_RELEASE\`](https://github.com/$repo/releases/tag/$OPENWRT_RELEASE) (\`${OPENWRT_COMMIT::12}\`)"
+            echo "- Profiles: $PROFILES (see \`profiles/\`)"
             echo
             echo "| File | Use |"
             echo "|---|---|"
-            echo "| \`*-<profile>-squashfs-sysupgrade.bin\` | upgrade a router already running this firmware (\`sysupgrade\`) |"
+            echo "| \`*-<profile>-squashfs-sysupgrade.bin\` | upgrade a router already running this firmware (LuCI *System → Firmware Update*, or \`sysupgrade\`) |"
             echo "| \`*-<profile>-squashfs-factory.ubi\` | first install into a dual-boot slot (see the README) |"
             echo "| \`*-<profile>-initramfs-uImage.itb\` | RAM boot via U-Boot TFTP (UART) |"
             echo
@@ -150,8 +207,24 @@ jobs:
             cat release/sha256sums
             echo '```'
           } > notes.md
+          channel=(--prerelease)
+          [ "$PUBLISH" = stable ] && channel=(--latest)
           gh release create "$TAG" release/* \
             --target "$GITHUB_SHA" \
             --title "RA81 NSS $TAG" \
-            --prerelease \
+            "${channel[@]}" \
             --notes-file notes.md
+
+      - name: Record the new pins
+        if: needs.plan.outputs.changed == 'true'
+        run: |
+          . upstream/openwrt.conf
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add upstream/
+          git commit -m "upstream: $OPENWRT_RELEASE" -m "Built and published as $TAG."
+          for i in 1 2 3; do
+            git pull --rebase -q origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep 5
+          done
+          echo "::error::could not push the new pins"; exit 1

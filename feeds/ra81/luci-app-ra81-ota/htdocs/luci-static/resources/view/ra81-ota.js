@@ -5,9 +5,10 @@
 'require ui';
 'require poll';
 'require form';
+'require uci';
 
-function ota(cmd) {
-	return fs.exec('/usr/sbin/ra81-ota', [ cmd ]).then(function(res) {
+function ota(cmd, arg) {
+	return fs.exec('/usr/sbin/ra81-ota', arg ? [ cmd, arg ] : [ cmd ]).then(function(res) {
 		if (res.code !== 0)
 			throw new Error((res.stderr || '').replace(/^ra81-ota: /, '').trim() ||
 				_('ra81-ota %s failed').format(cmd));
@@ -18,6 +19,10 @@ function ota(cmd) {
 
 function fmtTime(s) {
 	return '%d:%02d'.format(Math.floor(s / 60), s % 60);
+}
+
+function fmtDate(d) {
+	return (d || '?').replace('T', ' ').replace('Z', ' UTC');
 }
 
 function row(label, value) {
@@ -44,9 +49,9 @@ return view.extend({
 	handleCheck: function(ev) {
 		var node = this.checkNode;
 
-		dom.content(node, E('em', { 'class': 'spinning' }, _('Checking for updates…')));
-		return ota('check').then(L.bind(function(rel) {
-			this.release = rel;
+		dom.content(node, E('em', { 'class': 'spinning' }, _('Looking up releases…')));
+		return ota('list').then(L.bind(function(list) {
+			this.releases = list;
 			this.renderCheck();
 		}, this)).catch(function(e) {
 			dom.content(node, E('p', { 'class': 'alert-message warning' }, e.message));
@@ -54,52 +59,82 @@ return view.extend({
 	},
 
 	renderCheck: function() {
-		var rel = this.release, st = this.status || {}, items = [], busy;
+		var list = this.releases, st = this.status || {}, busy, trial, rows, newest;
 
-		if (!rel)
+		if (!list)
 			return;
 
 		busy = st.job && busyStates.indexOf(st.job.state) >= 0;
-		items.push(E('p', {}, [
-			_('Newest release: '), E('strong', {}, rel.tag), ' (%s) '.format((rel.date || '').replace('T', ' ').replace('Z', ' UTC')),
-			E('a', { 'href': rel.url, 'target': '_blank', 'rel': 'noreferrer' }, _('release notes'))
-		]));
-		if (!rel.signed)
-			items.push(E('p', { 'class': 'alert-message warning' }, _('This release is not signed.')));
+		trial = st.trial && st.trial.active;
 
-		if (!rel.update_available)
-			items.push(E('p', {}, _('The installed firmware is up to date.')));
-		else if (st.trial && st.trial.active)
-			items.push(E('p', {}, _('Keep or roll back the firmware on trial before installing another one.')));
-		else
-			items.push(E('button', {
-				'class': 'btn cbi-button cbi-button-apply',
-				'disabled': busy ? true : null,
-				'click': ui.createHandlerFn(this, 'handleUpdate')
-			}, _('Install %s').format(rel.tag)));
+		if (!list.releases.length) {
+			dom.content(this.checkNode, E('p', { 'class': 'alert-message warning' },
+				list.channel == 'stable'
+					? _('%s has no stable release for profile %s yet. Switch the channel to "testing" below to see test releases.').format(list.repo, list.profile)
+					: _('%s has no release for profile %s.').format(list.repo, list.profile)));
+			return;
+		}
 
-		dom.content(this.checkNode, items);
+		newest = list.releases[0];
+		rows = list.releases.map(L.bind(function(rel) {
+			var state = {
+				installed: E('em', {}, _('installed')),
+				newer: E('strong', {}, _('newer')),
+				older: _('older')
+			}[rel.relation];
+
+			return E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td left' }, E('a', { 'href': rel.url, 'target': '_blank', 'rel': 'noreferrer' }, rel.tag)),
+				E('td', { 'class': 'td left' }, fmtDate(rel.date)),
+				E('td', { 'class': 'td left' }, rel.channel == 'stable' ? _('stable') : _('testing')),
+				E('td', { 'class': 'td left' }, [ state, rel.signed ? '' : E('span', { 'class': 'label warning' }, _('unsigned')) ]),
+				E('td', { 'class': 'td right' }, rel.relation == 'installed' ? '' : E('button', {
+					'class': 'btn cbi-button ' + (rel.relation == 'newer' ? 'cbi-button-apply' : 'cbi-button-neutral'),
+					'disabled': (busy || trial) ? true : null,
+					'click': ui.createHandlerFn(this, 'handleUpdate', rel, list.repo)
+				}, _('Install')))
+			]);
+		}, this));
+
+		dom.content(this.checkNode, [
+			E('p', {}, newest.relation == 'newer'
+				? _('An update is available: %s.').format(newest.tag)
+				: _('No newer %s release than the installed firmware.').format(list.channel == 'stable' ? _('stable') : _('testing'))),
+			trial ? E('p', {}, _('Keep or roll back the firmware on trial before installing another one.')) : '',
+			E('table', { 'class': 'table' }, [
+				E('tr', { 'class': 'tr table-titles' }, [
+					E('th', { 'class': 'th' }, _('Release')),
+					E('th', { 'class': 'th' }, _('Published')),
+					E('th', { 'class': 'th' }, _('Channel')),
+					E('th', { 'class': 'th' }, _('Compared to installed')),
+					E('th', { 'class': 'th' }, '')
+				])
+			].concat(rows))
+		]);
 	},
 
-	handleUpdate: function(ev) {
-		var rel = this.release;
+	handleUpdate: function(rel, repo, ev) {
+		var older = rel.relation == 'older';
 
 		ui.showModal(_('Install %s?').format(rel.tag), [
+			older ? E('p', { 'class': 'alert-message warning' },
+				_('This release is older than the installed firmware. Your current settings are kept and may include options the older firmware does not know; this is usually harmless, but not guaranteed.')) : '',
 			E('p', {}, _('%s (%1024.2mB) will be downloaded from %s, verified and written to the other firmware slot. The router then reboots into it; settings are kept.')
-				.format(rel.image, rel.size, rel.repo)),
+				.format(rel.image, rel.size, repo)),
 			E('p', {}, _('The new firmware starts on trial: keep it on this page afterwards, or it will be kept or rolled back automatically when the trial period ends (see the settings below).')),
 			E('p', {}, _('Packages installed by hand with apk are not carried over: add them to your build profile instead.')),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 				E('button', {
-					'class': 'btn cbi-button-action important',
+					'class': 'btn important ' + (older ? 'cbi-button-negative' : 'cbi-button-action'),
 					'click': ui.createHandlerFn(this, function() {
 						ui.hideModal();
-						return ota('start').then(L.bind(this.refresh, this)).catch(function(e) {
+						this.installing = rel;
+						return ota('start', rel.tag).then(L.bind(this.refresh, this)).catch(function(e) {
 							ui.addNotification(null, E('p', {}, e.message), 'danger');
 						});
 					})
-				}, _('Install'))
+				}, older ? _('Install older release') : _('Install'))
 			])
 		]);
 	},
@@ -169,7 +204,7 @@ return view.extend({
 		nodes.push(E('table', { 'class': 'table' }, [
 			row(_('Installed release'), inst.tag || E('em', {}, _('local build'))),
 			row(_('Build profile'), inst.profile || '?'),
-			row(_('Built'), '%s (%s)'.format(inst.date || '?', inst.commit || '?')),
+			row(_('Built'), '%s (%s)'.format(fmtDate(inst.date), inst.commit || '?')),
 			row(_('Firmware slot'), st.slot >= 0 ? String(st.slot) : '?'),
 			row(_('Update source'), st.repo
 				? E('a', { 'href': 'https://github.com/%s/releases'.format(st.repo), 'target': '_blank', 'rel': 'noreferrer' }, st.repo)
@@ -185,8 +220,8 @@ return view.extend({
 				error: _('The update failed:')
 			}[job.state];
 
-			if (job.state == 'downloading' && job.received && this.release && this.release.size)
-				text += ' %d%%'.format(Math.floor(job.received * 100 / this.release.size));
+			if (job.state == 'downloading' && job.received && this.installing && this.installing.size)
+				text += ' %d%%'.format(Math.floor(job.received * 100 / this.installing.size));
 
 			nodes.push(E('p', {
 				'class': job.state == 'error' ? 'alert-message danger' : 'spinning'
@@ -212,7 +247,15 @@ return view.extend({
 			_('GitHub repository (owner/name) whose releases are installed. Empty: the one that built this firmware.'));
 		o.placeholder = (status.installed || {}).repo || '';
 
-		o = s.option(form.Flag, 'prerelease', _('Include pre-releases'));
+		o = s.option(form.ListValue, 'channel', _('Channel'),
+			_('Stable: releases the repository has marked as stable. Testing: every release, including automatic builds of new upstream versions.'));
+		o.value('stable', _('Stable'));
+		o.value('testing', _('Testing'));
+		o.cfgvalue = function(section_id) {
+			// settings from before channels existed
+			return uci.get('ra81-ota', section_id, 'channel') ||
+				(uci.get('ra81-ota', section_id, 'prerelease') == '1' ? 'testing' : 'stable');
+		};
 
 		o = s.option(form.Value, 'trial_timeout', _('Trial period'),
 			_('Seconds a newly installed firmware waits for you to keep or roll it back.'));
@@ -249,7 +292,7 @@ return view.extend({
 					E('button', {
 						'class': 'btn cbi-button cbi-button-action',
 						'click': ui.createHandlerFn(this, 'handleCheck')
-					}, _('Check for updates')),
+					}, _('Show releases')),
 					this.checkNode
 				]),
 				mapEl

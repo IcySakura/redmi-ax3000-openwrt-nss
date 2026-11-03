@@ -1,12 +1,17 @@
 #!/bin/sh
 # Over-the-air updates from the GitHub releases of a build repository.
 #
-#   ra81-ota status          installed firmware, trial and job state (JSON)
-#   ra81-ota check           look up the newest release (JSON)
-#   ra81-ota upgrade [-y]    download, verify and flash the newest release
-#   ra81-ota start           the same, detached (used by LuCI); see "status"
-#   ra81-ota confirm         keep the firmware being tried
-#   ra81-ota rollback        reboot into the previous firmware
+#   ra81-ota status              installed firmware, trial and job state (JSON)
+#   ra81-ota list                releases on the channel, newest first (JSON)
+#   ra81-ota check               the newest release on the channel (JSON)
+#   ra81-ota upgrade [-y] [TAG]  download, verify and flash a release
+#                                (default: the newest on the channel)
+#   ra81-ota start [TAG]         the same, detached (used by LuCI); see "status"
+#   ra81-ota confirm             keep the firmware being tried
+#   ra81-ota rollback            reboot into the previous firmware
+#
+# Channels: "stable" offers the releases that are not marked as pre-releases
+# on GitHub, "testing" offers all of them.
 #
 # An upgrade is flashed into the other dual-boot slot. Its first boot is a
 # trial: the boot is not confirmed until "confirm" is run or, after
@@ -49,7 +54,13 @@ load_config() {
 	config_load ra81-ota
 	config_get REPO main repo
 	config_get PUBKEY main pubkey /etc/ra81-nss/release.pub
-	config_get_bool PRERELEASE main prerelease 1
+	config_get CHANNEL main channel
+	if [ -z "$CHANNEL" ]; then
+		# settings from before channels existed
+		config_get_bool pre main prerelease 0
+		CHANNEL=stable
+		[ "$pre" = 1 ] && CHANNEL=testing
+	fi
 	config_get_bool ALLOW_UNSIGNED main allow_unsigned 0
 	config_get TRIAL_TIMEOUT main trial_timeout 600
 	config_get ON_TIMEOUT main on_timeout confirm
@@ -79,36 +90,97 @@ fetch() {
 	uclient-fetch -q -T 30 -O "$2" "$1" || { rm -f "$2"; return 1; }
 }
 
-# Newest release (drafts skipped, prereleases unless disabled) -> $WORK/release.*
-find_release() {
-	local i=0 pre draft names
-
+fetch_releases() {
 	[ -n "$REPO" ] || die "no release repository configured (ra81-ota.main.repo)"
 	[ -n "$PROFILE" ] || die "unknown image profile (no PROFILE in $BUILD_INFO)"
 	mkdir -p "$WORK"
-	fetch "https://api.github.com/repos/$REPO/releases?per_page=20" "$WORK/releases.json" ||
+	fetch "https://api.github.com/repos/$REPO/releases?per_page=30" "$WORK/releases.json" ||
 		die "cannot fetch the release list of $REPO"
+}
 
-	while :; do
-		REL_TAG=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].tag_name")
-		[ -n "$REL_TAG" ] || die "no release of $REPO has an image for profile $PROFILE"
-		draft=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].draft")
-		pre=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].prerelease")
-		if [ "$draft" != true ] && { [ "$pre" != true ] || [ "$PRERELEASE" = 1 ]; }; then
-			names=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].assets[*].name")
-			REL_IMAGE=$(echo "$names" | grep -e "-$PROFILE-squashfs-sysupgrade\.bin$" | head -n1)
-			[ -n "$REL_IMAGE" ] && break
+# Release number $1 of the list (newest first) -> REL_*; fails past the end
+rel_load() {
+	local T= D= P= R= U= A=
+
+	eval "$(jsonfilter -i "$WORK/releases.json" -e "T=@[$1].tag_name" -e "D=@[$1].published_at" \
+		-e "P=@[$1].prerelease" -e "R=@[$1].draft" -e "U=@[$1].html_url" -e "A=@[$1].assets[*].name" 2>/dev/null)"
+	[ -n "$T" ] || return 1
+
+	REL_TAG=$T REL_DATE=$D REL_URL=$U REL_DRAFT=$R
+	REL_CHANNEL=stable
+	case "$P" in 1|true) REL_CHANNEL=testing ;; esac
+	A=$(echo $A | tr ' ' '\n')
+	REL_IMAGE=$(echo "$A" | grep -e "-$PROFILE-squashfs-sysupgrade\.bin$" | head -n1)
+	REL_SIGNED=0
+	echo "$A" | grep -qx sha256sums.sig && REL_SIGNED=1
+	REL_SIZE=0
+	[ -z "$REL_IMAGE" ] ||
+		REL_SIZE=$(jsonfilter -i "$WORK/releases.json" -e "@[$1].assets[@.name='$REL_IMAGE'].size")
+	REL_BASE="https://github.com/$REPO/releases/download/$REL_TAG"
+}
+
+# Whether the loaded release is offered on the configured channel
+rel_offered() {
+	case "$REL_DRAFT" in 1|true) return 1 ;; esac
+	[ -n "$REL_IMAGE" ] && { [ "$CHANNEL" = testing ] || [ "$REL_CHANNEL" = stable ]; }
+}
+
+# "2026-11-02T23:42:05Z" -> 20261102234205
+datenum() {
+	echo "$1" | tr -cd 0-9
+}
+
+# Date of the installed release (its build date if it is not in the list)
+installed_date() {
+	local tag=$(info RELEASE_TAG) d=
+
+	[ -z "$tag" ] || d=$(jsonfilter -i "$WORK/releases.json" -e "@[@.tag_name='$tag'].published_at" 2>/dev/null)
+	echo "${d:-$(info BUILD_DATE)}"
+}
+
+# How the loaded release relates to the installed one: installed/newer/older
+rel_relation() {
+	local inst=$1
+
+	if [ "$REL_TAG" = "$(info RELEASE_TAG)" ]; then
+		echo installed
+	elif [ "$(datenum "$REL_DATE")" -gt "$(datenum "$inst")" ]; then
+		echo newer
+	else
+		echo older
+	fi
+}
+
+# Release $1 (any channel), or the newest one on the channel -> REL_*
+find_release() {
+	local i=0
+
+	case "$1" in *[!A-Za-z0-9._-]*) die "bad release name: $1" ;; esac
+	fetch_releases
+	while rel_load $i; do
+		if [ -n "$1" ]; then
+			if [ "$REL_TAG" = "$1" ]; then
+				[ -n "$REL_IMAGE" ] || die "release $1 has no image for profile $PROFILE"
+				return 0
+			fi
+		elif rel_offered; then
+			return 0
 		fi
 		i=$((i + 1))
 	done
+	[ -z "$1" ] || die "no release $1 among the 30 newest of $REPO"
+	die "no $CHANNEL release of $REPO has an image for profile $PROFILE"
+}
 
-	REL_DATE=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].published_at")
-	REL_URL=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].html_url")
-	REL_SIZE=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].assets[@.name='$REL_IMAGE'].size")
-	REL_SIGNED=0
-	echo "$names" | grep -qx sha256sums.sig && REL_SIGNED=1
-	REL_BASE="https://github.com/$REPO/releases/download/$REL_TAG"
-	rm -f "$WORK/releases.json"
+json_add_release() {
+	json_add_string tag "$REL_TAG"
+	json_add_string date "$REL_DATE"
+	json_add_string url "$REL_URL"
+	json_add_string channel "$REL_CHANNEL"
+	json_add_string image "$REL_IMAGE"
+	json_add_int size "${REL_SIZE:-0}"
+	json_add_boolean signed "$REL_SIGNED"
+	json_add_string relation "$(rel_relation "$1")"
 }
 
 cmd_status() {
@@ -161,45 +233,68 @@ cmd_status() {
 	json_dump
 }
 
-cmd_check() {
-	local installed
+cmd_list() {
+	local i=0 inst
 
 	load_config
-	find_release
-	installed=$(info RELEASE_TAG)
+	fetch_releases
+	inst=$(installed_date)
 
 	json_init
 	json_add_string repo "$REPO"
-	json_add_string tag "$REL_TAG"
-	json_add_string date "$REL_DATE"
-	json_add_string url "$REL_URL"
-	json_add_string image "$REL_IMAGE"
-	json_add_int size "${REL_SIZE:-0}"
-	json_add_boolean signed "$REL_SIGNED"
-	json_add_string installed "$installed"
-	json_add_boolean update_available "$([ "$REL_TAG" != "$installed" ] && echo 1 || echo 0)"
+	json_add_string channel "$CHANNEL"
+	json_add_string profile "$PROFILE"
+	json_add_string installed "$(info RELEASE_TAG)"
+	json_add_array releases
+	while rel_load $i; do
+		if rel_offered; then
+			json_add_object
+			json_add_release "$inst"
+			json_close_object
+		fi
+		i=$((i + 1))
+	done
+	json_close_array
+	json_dump
+}
+
+cmd_check() {
+	local relation
+
+	load_config
+	find_release
+	relation=$(rel_relation "$(installed_date)")
+
+	json_init
+	json_add_string repo "$REPO"
+	json_add_string channel "$CHANNEL"
+	json_add_release "$(installed_date)"
+	json_add_string installed "$(info RELEASE_TAG)"
+	json_add_boolean update_available "$([ "$relation" = newer ] && echo 1 || echo 0)"
 	json_dump
 }
 
 cmd_upgrade() {
-	local sum
+	local sum yes= tag=
 
+	[ "$1" = -y ] && { yes=1; shift; }
+	tag=$1
 	load_config
 	in_trial && die "the running firmware is on trial: confirm or roll it back first"
 	[ "$(xiaomi_dualboot_slot)" ] || die "cannot tell the running slot; not a dual-boot RA81?"
 
-	job_set checking "Looking up the newest release of $REPO"
-	find_release
+	job_set checking "Looking up ${tag:-the newest $CHANNEL release} in $REPO"
+	find_release "$tag"
 	[ "$REL_SIGNED" = 1 ] || [ "$ALLOW_UNSIGNED" = 1 ] ||
 		die "release $REL_TAG is not signed (set ra81-ota.main.allow_unsigned=1 to accept that)"
 
-	if [ "$1" != -y ]; then
+	if [ -z "$yes" ]; then
 		echo "Install $REL_TAG ($REL_IMAGE) from $REPO into the other slot? [y/N]"
 		read -r answer
 		[ "$answer" = y ] || exit 1
 	fi
 
-	rm -f "$WORK/firmware.bin" "$WORK/sha256sums" "$WORK/sha256sums.sig"
+	rm -f "$WORK/firmware.bin" "$WORK/sha256sums" "$WORK/sha256sums.sig" "$WORK/releases.json"
 	job_set downloading "$REL_TAG: $REL_IMAGE ($REL_SIZE bytes)"
 	fetch "$REL_BASE/sha256sums" "$WORK/sha256sums" || die "cannot download sha256sums"
 	fetch "$REL_BASE/$REL_IMAGE" "$WORK/firmware.bin" || die "cannot download $REL_IMAGE"
@@ -230,12 +325,14 @@ cmd_upgrade() {
 }
 
 cmd_start() {
+	case "$1" in *[!A-Za-z0-9._-]*) die "bad release name: $1" ;; esac
 	mkdir -p "$WORK"
 	case "$(sed -n 1p "$JOB" 2>/dev/null)" in
 	checking|downloading|verifying|flashing) die "an update is already running" ;;
 	esac
 	job_set checking "Starting"
-	IN_JOB=1 /usr/sbin/ra81-ota upgrade -y </dev/null >/dev/null 2>&1 &
+	# Fully detached: rpcd (LuCI) would otherwise wait for the job
+	IN_JOB=1 start-stop-daemon -S -b -x /usr/sbin/ra81-ota -- upgrade -y $1
 	echo "started"
 }
 
@@ -293,9 +390,10 @@ cmd_watch() {
 
 case "$1" in
 status) cmd_status ;;
+list) cmd_list ;;
 check) cmd_check ;;
 upgrade) shift; cmd_upgrade "$@" ;;
-start) cmd_start ;;
+start) cmd_start "$2" ;;
 confirm) cmd_confirm ;;
 rollback) cmd_rollback ;;
 watch) cmd_watch ;;

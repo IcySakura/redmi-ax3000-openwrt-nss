@@ -4,13 +4,14 @@
 		"read": {
 			"file": {
 				"/usr/sbin/ra81-ota status": [ "exec" ],
+				"/usr/sbin/ra81-ota list": [ "exec" ],
 				"/usr/sbin/ra81-ota check": [ "exec" ]
 			},
 			"uci": [ "ra81-ota" ]
 		},
 		"write": {
 			"file": {
-				"/usr/sbin/ra81-ota start": [ "exec" ],
+				"/usr/sbin/ra81-ota start *": [ "exec" ],
 				"/usr/sbin/ra81-ota confirm": [ "exec" ],
 				"/usr/sbin/ra81-ota rollback": [ "exec" ]
 			},

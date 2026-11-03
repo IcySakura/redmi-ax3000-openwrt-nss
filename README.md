@@ -169,7 +169,7 @@ profile ([below](#profiles-building-the-packages-you-use)), so the image you
 upgrade to already contains it. The image records its build in
 `/etc/ra81-nss/build-info`.
 
-- **In LuCI:** *System → Firmware Update* → *Check for updates* → *Install*
+- **In LuCI:** *System → Firmware Update* → *Show releases* → *Install*
   (see [Firmware updates](#firmware-updates)).
 - **On the command line:** `ra81-ota check`, then `ra81-ota upgrade`.
 - **By hand**, e.g. with an image built without the updater: use the
@@ -194,9 +194,12 @@ The images include `ra81-ota` (command line) and `luci-app-ra81-ota`
 (*System → Firmware Update*). They update the router from the GitHub releases
 of the repository that built its image:
 
-1. **Check** looks up the newest release and the sysupgrade image of the
-   profile the router was built with (`PROFILE` in `/etc/ra81-nss/build-info`).
-2. **Install** downloads it, verifies the release's `sha256sums` against the
+1. **Show releases** lists the releases on the router's channel (below),
+   newest first, marked newer or older than the installed firmware. Each has
+   an image for the profile the router was built with (`PROFILE` in
+   `/etc/ra81-nss/build-info`).
+2. **Install** on any of them - the newest, or an older one to go back to -
+   downloads it, verifies the release's `sha256sums` against the
    `usign` key in the image (`/etc/ra81-nss/release.pub`) and the image against
    `sha256sums`, and writes it to the other slot. Unsigned releases are refused.
 3. The router reboots into the new firmware **on trial**. *System → Firmware
@@ -207,9 +210,21 @@ of the repository that built its image:
    next reboot rolls it back. The previous firmware stays in its slot either
    way.
 
-Settings (in LuCI, or `/etc/config/ra81-ota`): release repository,
-pre-releases, trial period, what happens when it ends, health-check host,
-signing key.
+Settings (in LuCI, or `/etc/config/ra81-ota`): release repository, channel,
+trial period, what happens when it ends, health-check host, signing key.
+
+**Channels.** Releases are normally published as GitHub pre-releases, the **testing**
+channel. A release that has run well is promoted to **stable** by unmarking
+*Set as a pre-release* on its GitHub page. Routers on *stable* (the default)
+are offered only promoted releases; routers on *testing* are offered all of
+them.
+
+**Going back.** Installing an older release keeps your current settings,
+which may contain options the older firmware does not know. That is usually
+harmless with these snapshot builds, but not guaranteed.
+
+On the command line: `ra81-ota list`, `ra81-ota check`, `ra81-ota upgrade
+[TAG]`, `ra81-ota confirm`, `ra81-ota rollback`.
 
 The updater only knows what is in the release: a release built from a fork
 without your packages installs without them. Keep your packages in a profile.
@@ -273,10 +288,25 @@ kernel is not an official OpenWrt one, so official kmods do not install.
 
 ### GitHub Actions
 
-*Actions → Build firmware → Run workflow*, with the profiles to build
-(default: `default mesh`). One run builds all of them in one tree (~1.5-3 h
-for the first profile on a hosted runner, minutes for each further one),
-validates them and publishes a pre-release.
+*Actions → Build firmware → Run workflow* builds the profiles you name
+(default: `default mesh`) in one tree (~1 h on a hosted runner), validates
+them and publishes a release:
+
+- **upstream:** `pinned` builds `upstream/` as committed; `latest` first moves
+  it to the newest release of the upstream tree.
+- **publish:** `testing` (a pre-release), `stable`, or `none` (images only
+  as a workflow artifact).
+
+**Automatic builds.** Every day the workflow checks whether the upstream tree
+has published a new release (`kuncy7/openwrt-nss-edma`, `ipq50xx-*`: a tested
+commit plus the feed revisions it was built with). If it has, it moves
+`upstream/` to it (`scripts/bump-upstream.sh`), builds and validates both
+profiles, publishes them on the **testing** channel and commits the new pins.
+If upstream breaks the build or the patches no longer apply, nothing is
+published and the failed run notifies you. Nothing is ever installed
+automatically: routers only update when you choose a release. (GitHub pauses
+scheduled workflows in repositories without activity for 60 days; the commits
+of the automatic builds count as activity.)
 
 Releases are signed when the repository has the secret `USIGN_SECRET_KEY`
 (the content of a `usign` secret key file, both lines). If you fork this
@@ -341,7 +371,7 @@ on the Windows directories WSL adds.
 ## Repository layout
 
 ```
-upstream/openwrt.conf    pinned upstream tree (URL + commit)
+upstream/openwrt.conf    pinned upstream tree (URL, commit, upstream release)
 upstream/feeds.conf      pinned feeds; add third-party feeds here
 patches/                 RA81 board support on top of the upstream tree
 configs/ra81-nss.config  base build configuration (diffconfig)
@@ -351,6 +381,7 @@ feeds/ra81/              this repository's packages: ra81-ota, luci-app-ra81-ota
 overlays/common/         files in every image (memory tuning)
 overlays/examples/       optional first-boot examples (bridged access point)
 scripts/build.sh         reproducible build of one or more profiles
+scripts/bump-upstream.sh move upstream/ to a release of the upstream tree
 scripts/profile.sh       profile -> .config, and the post-defconfig check
 scripts/router-packages.sh  profile from a running router
 scripts/ra81-install-slot.sh  installer for the inactive slot (runs on the router)
