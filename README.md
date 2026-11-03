@@ -87,7 +87,8 @@ Every release (and every local build) has one set of images per profile:
 | `*-initramfs-uImage.itb` | RAM boot from U-Boot over TFTP (needs UART) |
 
 Profiles in this repository: `default` (the base image) and `mesh` (full
-`wpad-mesh-mbedtls` for 802.11s with SAE plus `batman-adv`, unconfigured).
+`wpad-mesh-mbedtls` for 802.11s with SAE plus `batman-adv`, unconfigured); see
+[Packages](#packages) for what they contain and how to build your own.
 
 A fresh install comes up like any OpenWrt router: `192.168.1.1`, DHCP server on
 the LAN, **no root password**, Wi-Fi off. Set a password first. For a bridged
@@ -165,7 +166,7 @@ firmware stays in the other slot until the next upgrade overwrites it.
 
 Settings are kept. **Packages installed with `apk add` are not**: an upgrade
 replaces the whole system image. Put everything you want to keep into a
-profile ([below](#profiles-building-the-packages-you-use)), so the image you
+profile ([below](#packages)), so the image you
 upgrade to already contains it. The image records its build in
 `/etc/ra81-nss/build-info`.
 
@@ -251,24 +252,64 @@ The updater is not tied to this repository:
   `configs/base.packages`. The dual-boot hold in `patches/0003` does nothing
   without the updater.
 
-## Profiles: building the packages you use
+## Packages
 
-A profile, `profiles/<name>.packages`, lists packages on top of the base config
-(`configs/ra81-nss.config`) and the packages every profile gets
-(`configs/base.packages`: the firmware updater), one per line; `-name` leaves
-a package out:
+### What the images contain
 
-```
--wpad-basic-mbedtls
-wpad-mesh-mbedtls
-kmod-batman-adv
-```
+Every image is built from three layers:
+
+| Layer | File | Contents |
+|---|---|---|
+| Base | `configs/ra81-nss.config` | OpenWrt with LuCI, the NSS offload stack (NSS firmware and drivers, ECM, ath11k with NSS offload, PPPoE acceleration) and the RA81 board support |
+| Every profile | `configs/base.packages` | `ra81-ota`, `luci-app-ra81-ota` (the [firmware updater](#firmware-updates)) |
+| One profile | `profiles/<name>.packages` | what that profile adds or leaves out |
+
+The profiles in this repository:
+
+| Profile | Adds | Leaves out |
+|---|---|---|
+| `default` | nothing | nothing |
+| `mesh` | `wpad-mesh-mbedtls` (802.11s with SAE, plus 802.11r/k/v), `kmod-batman-adv`, `batctl-default` | `wpad-basic-mbedtls` |
+
+The complete package list of an image is in its release as
+`*-<profile>.manifest`, and on a running router in `apk list --installed`.
+The router also keeps the profile it was built from in
+`/etc/ra81-nss/profile.packages`.
+
+### Adding or removing packages
+
+Packages installed on the router with `apk add` last only until the next
+upgrade, which replaces the whole system image, and kernel modules cannot be
+installed that way at all (the kernel is not an official OpenWrt one). To keep
+a package, build it into your images:
+
+1. Fork this repository (or work in your copy).
+2. Edit a profile, or copy `profiles/default.packages` to
+   `profiles/<your-name>.packages`. One package per line, `#` starts a
+   comment:
+
+   ```
+   # add a package
+   luci-app-sqm
+   # leave out a package the base or another layer includes
+   -wpad-basic-mbedtls
+   ```
+
+   Package names are those of the OpenWrt feeds: search them with `apk search`
+   on a router, in [the OpenWrt package table](https://openwrt.org/packages/start),
+   or with `make menuconfig` in `build/openwrt` after a local build.
+   Dependencies are added automatically. Build options of a package go in the
+   same way when its Kconfig names them `PACKAGE_<package>_<option>`
+   (`<package>_<option>` turns one on, `-<package>_<option>` off).
+3. Build: push and run *Actions → Build firmware* with your profile in
+   **profiles**, or locally `scripts/build.sh --profile <your-name>`.
+4. Install the new release on the router (*System → Firmware Update*).
 
 The build **fails** if a listed package does not make it into the image
 (unknown name, missing feed, unmet dependency), so an upgrade never drops
 software silently.
 
-To turn a running router into a profile:
+To turn what a running router has into a profile:
 
 ```sh
 scripts/router-packages.sh root@<router> > profiles/my-router.packages
@@ -278,11 +319,26 @@ It starts from the profile the router's image was built from and adds what
 was installed (and `-name` for what was removed) since. Review it before
 committing - it lists everything you run.
 
-Packages can come from any feed in `upstream/feeds.conf`. To use a third-party
-feed, add it there pinned to a commit (`src-git name https://...^<commit>`) and
-list its packages in a profile. Check the feed's licence before publishing
-images built with it. Kernel modules always have to come from this build: the
-kernel is not an official OpenWrt one, so official kmods do not install.
+### Packages from other feeds
+
+Packages can come from any feed in `upstream/feeds.conf`. To use a
+third-party feed, add it there pinned to a commit, then list its packages in a
+profile:
+
+```
+src-git myfeed https://github.com/<owner>/<repo>.git^<commit>
+```
+
+`scripts/bump-upstream.sh` (and with it the automatic builds) only moves the
+feeds of the upstream tree; move the pin of your own feeds by hand. Check a
+feed's licence before publishing images built with it.
+
+### Your own packages
+
+`feeds/ra81/` is a feed of this repository's own packages (the firmware
+updater). Add a directory there with an OpenWrt package `Makefile` (and its
+files) and list the package in a profile; `scripts/build.sh` makes the feed
+available to every build.
 
 ## Building
 
