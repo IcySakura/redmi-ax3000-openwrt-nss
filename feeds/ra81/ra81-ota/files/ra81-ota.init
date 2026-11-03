@@ -24,6 +24,8 @@ start_service() {
 		# previous slot, which is this one.
 		mkdir -p /etc/ra81-ota
 		echo "Update to $trial was rolled back on $(date)" > /etc/ra81-ota/last-result
+		printf '%s\trolled-back\t%s\t%s\n' "$(date +%s)" "$trial" \
+			"Update to $trial did not stick; back on the previous firmware" >> /etc/ra81-ota/history
 		logger -t ra81-ota "update to $trial was rolled back"
 		xiaomi_dualboot_setenv ra81_ota_trial
 	fi

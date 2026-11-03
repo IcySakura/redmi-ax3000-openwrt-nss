@@ -5,7 +5,8 @@
 			"file": {
 				"/usr/sbin/ra81-ota status": [ "exec" ],
 				"/usr/sbin/ra81-ota list": [ "exec" ],
-				"/usr/sbin/ra81-ota check": [ "exec" ]
+				"/usr/sbin/ra81-ota check": [ "exec" ],
+				"/usr/sbin/ra81-ota details *": [ "exec" ]
 			},
 			"uci": [ "ra81-ota" ]
 		},

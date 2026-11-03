@@ -117,6 +117,7 @@ if [ -e "$R/usr/sbin/ra81-ota" ]; then
 	check "ra81-ota init enabled (S98, before the S99 confirmation)" "ls '$R'/etc/rc.d/ | grep -q '^S98ra81-ota$'"
 	check "LuCI view for ra81-ota" "[ -e '$R/www/luci-static/resources/view/ra81-ota.js' ]"
 	check "release key for ra81-ota" "[ -s '$R/etc/ra81-nss/release.pub' ]"
+	check "ra81-ota what's new: details.uc, components.json, history kept" "[ -s '$R/usr/share/ra81-ota/details.uc' ] && [ -s '$R/etc/ra81-nss/components.json' ] && grep -q '/etc/ra81-ota/' '$R/lib/upgrade/keep.d/ra81-ota'"
 	grep -q '^OTA_REPO=.' "$R/etc/ra81-nss/build-info" ||
 		echo "  NOTE no OTA_REPO in build-info: set ra81-ota.main.repo on the router"
 fi

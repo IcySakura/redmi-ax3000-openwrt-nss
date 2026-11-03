@@ -146,6 +146,7 @@ jobs:
               cp "$f" "release/${name/xiaomi_redmi-ax3000/xiaomi_redmi-ax3000-$p}"
             done
             cp "out/$p/config.full" "release/config-$p.txt"
+            cp "out/$p/versions.json" "release/versions-$p.json"
           done
           (cd release && sha256sum -- * | sort -k2) > sha256sums
           mv sha256sums release/
@@ -179,6 +180,7 @@ jobs:
         if: env.PUBLISH != 'none'
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           . upstream/openwrt.conf
           repo=${OPENWRT_URL#https://github.com/}; repo=${repo%.git}
@@ -189,6 +191,23 @@ jobs:
             echo "- Upstream: [\`$OPENWRT_RELEASE\`](https://github.com/$repo/releases/tag/$OPENWRT_RELEASE) (\`${OPENWRT_COMMIT::12}\`)"
             echo "- Profiles: $PROFILES (see \`profiles/\`)"
             echo
+            # What changed since the newest earlier release (its versions-<profile>.json)
+            prev=$(gh release list --limit 30 --exclude-drafts --json tagName --jq '.[].tagName' | grep -vxF "$TAG" | head -n1 || true)
+            sources=()
+            for p in $PROFILES; do
+              if [ -n "$prev" ]; then
+                gh release download "$prev" -p "versions-$p.json" -D prev 2>/dev/null || true
+              fi
+              [ -s "prev/versions-$p.json" ] || continue
+              python3 -I scripts/versions.py notes "release/versions-$p.json" "prev/versions-$p.json" "$prev" \
+                --profile "$p" "${sources[@]}" configs/base.packages "profiles/$p.packages" ||
+                echo "(Could not compare profile $p with $prev.)"
+              sources=(--no-sources)
+            done
+            if [ ${#sources[@]} -eq 0 ]; then
+              echo "No earlier release with version information to compare with."
+              echo
+            fi
             echo "| File | Use |"
             echo "|---|---|"
             echo "| \`*-<profile>-squashfs-sysupgrade.bin\` | upgrade a router already running this firmware (LuCI *System → Firmware Update*, or \`sysupgrade\`) |"

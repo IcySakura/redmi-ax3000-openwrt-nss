@@ -4,6 +4,7 @@
 #   ra81-ota status              installed firmware, trial and job state (JSON)
 #   ra81-ota list                releases on the channel, newest first (JSON)
 #   ra81-ota check               the newest release on the channel (JSON)
+#   ra81-ota details [TAG]       what installing a release would change (JSON)
 #   ra81-ota upgrade [-y] [TAG]  download, verify and flash a release
 #                                (default: the newest on the channel)
 #   ra81-ota start [TAG]         the same, detached (used by LuCI); see "status"
@@ -31,6 +32,7 @@ JOB=$WORK/job
 HOLD=/var/run/xiaomi-dualboot.hold
 DEADLINE=/var/run/ra81-ota.deadline
 LAST=/etc/ra81-ota/last-result
+HISTORY=/etc/ra81-ota/history
 ENV_TRIAL=ra81_ota_trial
 
 die() {
@@ -73,6 +75,13 @@ job_set() {
 	mkdir -p "$WORK"
 	printf '%s\n%s\n' "$1" "$2" > "$JOB.tmp" && mv "$JOB.tmp" "$JOB"
 	logger -t ra81-ota "$1${2:+: $2}"
+}
+
+# Update history: one line per event, "<epoch> <event> <release> <text>"
+history_add() {
+	mkdir -p "${HISTORY%/*}"
+	printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "${2:--}" "$3" >> "$HISTORY"
+	tail -n 50 "$HISTORY" > "$HISTORY.tmp" && mv "$HISTORY.tmp" "$HISTORY"
 }
 
 uptime_s() {
@@ -230,6 +239,20 @@ cmd_status() {
 	json_close_object
 
 	[ -s "$LAST" ] && json_add_string last_result "$(cat "$LAST")"
+
+	json_add_array history
+	# newest first
+	tail -n 10 "$HISTORY" 2>/dev/null | sed -n '1!G;h;$p' > "$WORK.history"
+	while IFS="$(printf '\t')" read -r time event tag text; do
+		json_add_object
+		json_add_int time "$time"
+		json_add_string event "$event"
+		json_add_string tag "$tag"
+		json_add_string text "$text"
+		json_close_object
+	done < "$WORK.history"
+	rm -f "$WORK.history"
+	json_close_array
 	json_dump
 }
 
@@ -272,6 +295,24 @@ cmd_check() {
 	json_add_string installed "$(info RELEASE_TAG)"
 	json_add_boolean update_available "$([ "$relation" = newer ] && echo 1 || echo 0)"
 	json_dump
+}
+
+cmd_details() {
+	local v
+
+	load_config
+	find_release "$1"
+	v=$WORK/versions.json
+	if ! fetch "$REL_BASE/versions-$PROFILE.json" "$v"; then
+		json_init
+		json_add_boolean available 0
+		json_add_string tag "$REL_TAG"
+		json_add_string url "$REL_URL"
+		json_dump
+		return 0
+	fi
+	ucode /usr/share/ra81-ota/details.uc "$v" /etc/ra81-nss/components.json \
+		/etc/ra81-nss/profile.packages "$REL_TAG" "$REL_URL" || die "cannot compare $REL_TAG with this firmware"
 }
 
 cmd_upgrade() {
@@ -317,6 +358,7 @@ cmd_upgrade() {
 	# /etc/init.d/ra81-ota). Cleared again if the upgrade does not start.
 	xiaomi_dualboot_setenv "$ENV_TRIAL $REL_TAG" || die "cannot write the U-Boot environment"
 	rm -f "$LAST"
+	history_add install "$REL_TAG" "Installing $REL_TAG over $(version)"
 	job_set flashing "$REL_TAG: writing the other slot, then rebooting"
 	sync
 	sysupgrade "$WORK/firmware.bin"
@@ -344,6 +386,7 @@ cmd_confirm() {
 	rm -f "$HOLD" "$DEADLINE"
 	mkdir -p "${LAST%/*}"
 	echo "Kept $(version) on $(date)" > "$LAST"
+	history_add kept "$(info RELEASE_TAG)" "Kept $(version) after its trial"
 	logger -t ra81-ota "trial confirmed"
 	/etc/init.d/ra81-ota stop 2>/dev/null
 	echo "confirmed"
@@ -352,6 +395,7 @@ cmd_confirm() {
 # An unconfirmed trial boot rolls back on the next reset.
 cmd_rollback() {
 	in_trial || die "the running firmware is not on trial; flash the previous release instead"
+	history_add rollback "$(info RELEASE_TAG)" "Rolled back from $(version)"
 	logger -t ra81-ota "trial rejected, rebooting into the previous slot"
 	echo "rebooting into the previous firmware"
 	sync
@@ -392,6 +436,7 @@ case "$1" in
 status) cmd_status ;;
 list) cmd_list ;;
 check) cmd_check ;;
+details) cmd_details "$2" ;;
 upgrade) shift; cmd_upgrade "$@" ;;
 start) cmd_start "$2" ;;
 confirm) cmd_confirm ;;

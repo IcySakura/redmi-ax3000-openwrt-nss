@@ -34,6 +34,66 @@ function row(label, value) {
 
 var busyStates = [ 'checking', 'downloading', 'verifying', 'flashing' ];
 
+function link(href, text) {
+	return E('a', { 'href': href, 'target': '_blank', 'rel': 'noreferrer' }, text);
+}
+
+function table(titles, rows) {
+	return E('table', { 'class': 'table' }, [
+		E('tr', { 'class': 'tr table-titles' }, titles.map(function(t) { return E('th', { 'class': 'th' }, t); }))
+	].concat(rows.map(function(r) {
+		return E('tr', { 'class': 'tr' }, r.map(function(c) { return E('td', { 'class': 'td left' }, c); }));
+	})));
+}
+
+/* What installing a release changes, from "ra81-ota details" */
+function renderDetails(d, brief) {
+	var nodes = [], key, rest, byHand;
+
+	if (!d.available)
+		return [ E('p', {}, [ _('This release carries no version information (it predates it).'), ' ',
+			link(d.url, _('Read its release notes on GitHub.')) ]) ];
+
+	if (d.sources.length)
+		nodes.push(E('h5', {}, _('Sources')), table([ _('Source'), _('Change') ], d.sources.map(function(c) {
+			var change = c.from ? '%s → %s'.format(c.from, c.to) : _('new (%s)').format(c.to);
+			return [
+				c.release && c.release_url ? [ c.name, E('br'), link(c.release_url, c.release) ] : c.name,
+				c.url ? link(c.url, change) : change
+			];
+		})));
+	else
+		nodes.push(E('p', {}, _('Built from the same sources as the running firmware.')));
+
+	key = d.updated.filter(function(p) { return p.key; });
+	rest = d.updated.filter(function(p) { return !p.key; });
+	byHand = d.removed.filter(function(p) { return p.by_hand; });
+
+	nodes.push(E('h5', {}, _('Packages')));
+	if (key.length)
+		nodes.push(table([ _('Package'), _('Installed'), _('New') ], key.map(function(p) {
+			return [ E('code', {}, p.name), p.from, p.to ];
+		})));
+	nodes.push(E('p', {}, _('%d updated, %d added, %d removed.').format(d.updated.length, d.added.length, d.removed.length)));
+
+	if (!brief && (rest.length || d.added.length || d.removed.length))
+		nodes.push(E('details', {}, [
+			E('summary', {}, _('All package changes')),
+			E('ul', {}, [].concat(
+				rest.map(function(p) { return E('li', {}, [ E('code', {}, p.name), ' %s → %s'.format(p.from, p.to) ]); }),
+				d.added.map(function(p) { return E('li', {}, [ E('code', {}, p.name), ' %s '.format(p.to), E('em', {}, _('(added)')) ]); }),
+				d.removed.map(function(p) { return E('li', {}, [ E('code', {}, p.name), ' %s '.format(p.from), E('em', {}, p.by_hand ? _('(installed by hand, will be gone)') : _('(removed)')) ]); })
+			))
+		]));
+
+	if (byHand.length)
+		nodes.push(E('p', { 'class': 'alert-message warning' }, _('Installed by hand on this router and not part of this release, so they will be gone after installing it: %s. Add them to your build profile to keep them.')
+			.format(byHand.map(function(p) { return p.name; }).join(', '))));
+
+	nodes.push(E('p', {}, link(d.url, _('Release notes on GitHub'))));
+	return nodes;
+}
+
 return view.extend({
 	load: function() {
 		return ota('status').catch(function(e) { return { error: e.message }; });
@@ -88,11 +148,17 @@ return view.extend({
 				E('td', { 'class': 'td left' }, fmtDate(rel.date)),
 				E('td', { 'class': 'td left' }, rel.channel == 'stable' ? _('stable') : _('testing')),
 				E('td', { 'class': 'td left' }, [ state, rel.signed ? '' : E('span', { 'class': 'label warning' }, _('unsigned')) ]),
-				E('td', { 'class': 'td right' }, rel.relation == 'installed' ? '' : E('button', {
-					'class': 'btn cbi-button ' + (rel.relation == 'newer' ? 'cbi-button-apply' : 'cbi-button-neutral'),
-					'disabled': (busy || trial) ? true : null,
-					'click': ui.createHandlerFn(this, 'handleUpdate', rel, list.repo)
-				}, _('Install')))
+				E('td', { 'class': 'td right' }, rel.relation == 'installed' ? '' : [
+					E('button', {
+						'class': 'btn cbi-button cbi-button-neutral',
+						'click': ui.createHandlerFn(this, 'handleDetails', rel)
+					}, _("What's new")), ' ',
+					E('button', {
+						'class': 'btn cbi-button ' + (rel.relation == 'newer' ? 'cbi-button-apply' : 'cbi-button-neutral'),
+						'disabled': (busy || trial) ? true : null,
+						'click': ui.createHandlerFn(this, 'handleUpdate', rel, list.repo)
+					}, _('Install'))
+				])
 			]);
 		}, this));
 
@@ -113,10 +179,32 @@ return view.extend({
 		]);
 	},
 
+	handleDetails: function(rel, ev) {
+		ui.showModal(_('%s compared to this firmware').format(rel.tag), [ E('p', { 'class': 'spinning' }, _('Comparing…')) ]);
+		return ota('details', rel.tag).then(function(d) {
+			ui.showModal(_('%s compared to this firmware').format(rel.tag), renderDetails(d).concat([
+				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
+			]));
+		}).catch(function(e) {
+			ui.showModal(_('%s compared to this firmware').format(rel.tag), [
+				E('p', { 'class': 'alert-message warning' }, e.message),
+				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
+			]);
+		});
+	},
+
 	handleUpdate: function(rel, repo, ev) {
+		ui.showModal(_('Install %s?').format(rel.tag), [ E('p', { 'class': 'spinning' }, _('Comparing with this firmware…')) ]);
+		return ota('details', rel.tag).catch(function() { return null; }).then(L.bind(function(d) {
+			this.confirmUpdate(rel, repo, d);
+		}, this));
+	},
+
+	confirmUpdate: function(rel, repo, details) {
 		var older = rel.relation == 'older';
 
 		ui.showModal(_('Install %s?').format(rel.tag), [
+			details ? E('div', { 'class': 'cbi-section' }, [ E('h4', {}, _('What changes')) ].concat(renderDetails(details, true))) : '',
 			older ? E('p', { 'class': 'alert-message warning' },
 				_('This release is older than the installed firmware. Your current settings are kept and may include options the older firmware does not know; this is usually harmless, but not guaranteed.')) : '',
 			E('p', {}, _('%s (%1024.2mB) will be downloaded from %s, verified and written to the other firmware slot. The router then reboots into it; settings are kept.')
@@ -232,6 +320,17 @@ return view.extend({
 				this.awaitReboot(_('Installing…'), _('The new firmware is being written. The router reboots into it and this page reconnects when it is back (this takes a few minutes).'));
 			}
 		}
+
+		if (st.history && st.history.length)
+			nodes.push(E('h4', {}, _('Update history')), table([ _('Time'), _('Event') ], st.history.map(function(h) {
+				return [ new Date(h.time * 1000).toLocaleString(), h.text ];
+			})));
+
+		if (st.repo)
+			nodes.push(E('p', {}, [
+				link('https://github.com/%s/releases'.format(st.repo), _('All releases')), ' · ',
+				link('https://github.com/%s/commits'.format(st.repo), _('Change history of the firmware repository'))
+			]));
 
 		dom.content(this.statusNode, nodes);
 		this.renderCheck();

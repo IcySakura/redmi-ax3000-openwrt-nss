@@ -9,7 +9,7 @@
 # every profile after the first is an incremental build. Each profile gets
 # overlays/common plus any --overlay directories as the image's "files/".
 #
-# Results: $OUT/<profile>/ (images, manifest, config, sha256sums), validated
+# Results: $OUT/<profile>/ (images, manifest, config, versions.json, sha256sums), validated
 # with tools/validate-images.sh.
 #
 # Every image gets configs/base.packages (the OTA updater from feeds/ra81)
@@ -112,6 +112,10 @@ for PROFILE in "${PROFILES[@]}"; do
 	for o in "${OVERLAYS[@]}"; do cp -a "$o/." files/; done
 	[ ! -s "$TOP/keys/release.pub" ] || cp "$TOP/keys/release.pub" files/etc/ra81-nss/release.pub
 	cp "$TOP/profiles/$PROFILE.packages" files/etc/ra81-nss/profile.packages
+	# The sources of this build, for the updater's "what's new"
+	python3 -I "$TOP/scripts/versions.py" components \
+		"https://github.com/${OTA_REPO:-unknown/unknown}" "$(git -C "$TOP" rev-parse HEAD 2>/dev/null || echo unknown)" \
+		> files/etc/ra81-nss/components.json
 	cat > files/etc/ra81-nss/build-info <<-EOF
 		PROFILE=$PROFILE
 		RELEASE_TAG=$RELEASE_TAG
@@ -149,6 +153,8 @@ for PROFILE in "${PROFILES[@]}"; do
 	cp "$BIN"/*xiaomi_redmi-ax3000* "$BIN"/profiles.json "$dest"/
 	cp .config "$dest/config.full"
 	cp files/etc/ra81-nss/build-info "$dest/build-info"
+	python3 -I "$TOP/scripts/versions.py" versions files/etc/ra81-nss/components.json \
+		"$BIN"/*xiaomi_redmi-ax3000.manifest "$PROFILE" "$RELEASE_TAG" > "$dest/versions.json"
 	(cd "$dest" && sha256sum -- *xiaomi_redmi-ax3000* > sha256sums)
 
 	"$TOP/tools/validate-images.sh" "$dest"
