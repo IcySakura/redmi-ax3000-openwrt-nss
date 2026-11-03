@@ -272,7 +272,7 @@ The profiles in this repository:
 | Profile | Adds | Leaves out |
 |---|---|---|
 | `default` | nothing | nothing |
-| `mesh` | `wpad-mesh-mbedtls` (802.11s with SAE, plus 802.11r/k/v), `kmod-batman-adv`, `batctl-default` | `wpad-basic-mbedtls` |
+| `mesh` | `wpad-mesh-mbedtls` (802.11s with SAE, plus 802.11r/k/v), `kmod-batman-adv`, `batctl-default`, `luci-app-usteer` (client steering between bands and access points) | `wpad-basic-mbedtls` |
 
 The complete package list of an image is in its release as
 `*-<profile>.manifest`, and on a running router in `apk list --installed`.

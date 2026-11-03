@@ -4,3 +4,6 @@
 wpad-mesh-mbedtls
 kmod-batman-adv
 batctl-default
+
+# Client steering between bands and access points (Network -> usteer)
+luci-app-usteer
