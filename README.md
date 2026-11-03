@@ -29,7 +29,8 @@ Actions (or locally) that can update themselves from its releases. The NSS work 
 | Temperature sensors (4 zones, upstream trip points) | ✅ |
 | Factory MAC addresses | ✅ |
 | WAN port with NSS | ✅ tested |
-| LAN1-3 with NSS, buttons, LEDs, PPPoE, VLANs | ⚠️ built in, not tested on an RA81 yet |
+| Reset and mesh buttons (mesh = WPS) | ✅ |
+| LAN1-3 with NSS, LEDs, PPPoE, VLANs | ⚠️ built in, not tested on an RA81 yet |
 | 802.11s mesh offload | ❌ not in the 256 MB profile (mesh on the host path: `mesh` profile) |
 
 Tested on one RA81 unit. Reports from other units are welcome.
