@@ -63,16 +63,22 @@ jobs:
             dl-${{ hashFiles('upstream/*', 'configs/*', 'profiles/*') }}-
             dl-
 
+      - name: Name the release
+        id: tag
+        run: echo "tag=ra81-nss-$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
       - name: Build
         env:
           PROFILES: ${{ inputs.profiles }}
+          # recorded in the images' /etc/ra81-nss/build-info for the updater
+          OTA_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release && steps.tag.outputs.tag || '' }}
         run: |
           args=()
           for p in $PROFILES; do args+=(--profile "$p"); done
           scripts/build.sh -j "$(nproc)" "${args[@]}"
 
       - name: Collect release assets
-        id: assets
         env:
           PROFILES: ${{ inputs.profiles }}
         run: |
@@ -87,7 +93,6 @@ jobs:
           (cd release && sha256sum -- * | sort -k2) > sha256sums
           mv sha256sums release/
           cat release/sha256sums
-          echo "tag=ra81-nss-$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
       - name: Sign checksums
         env:
@@ -117,7 +122,7 @@ jobs:
         if: inputs.release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.assets.outputs.tag }}
+          TAG: ${{ steps.tag.outputs.tag }}
           PROFILES: ${{ inputs.profiles }}
         run: |
           {

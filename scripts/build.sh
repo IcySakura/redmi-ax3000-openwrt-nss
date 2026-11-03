@@ -12,8 +12,13 @@
 # Results: $OUT/<profile>/ (images, manifest, config, sha256sums), validated
 # with tools/validate-images.sh.
 #
+# Every image gets configs/base.packages (the OTA updater from feeds/ra81)
+# before its profile, and keys/release.pub as the key releases are checked with.
+#
 # Environment: SRC (default build/openwrt), DL_DIR (default build/dl),
-# OUT (default out), VENV (default build/venv-tools).
+# OUT (default out), VENV (default build/venv-tools), OTA_REPO (GitHub
+# owner/name the updater installs releases from; default: from the "origin"
+# remote), RELEASE_TAG (the release these images are published as).
 set -euo pipefail
 
 # Parse the whole script before running it, so editing it mid-build is safe.
@@ -51,6 +56,11 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 . "$TOP/upstream/openwrt.conf"
 REPO_COMMIT=$(git -C "$TOP" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+if [ -z "${OTA_REPO+set}" ]; then
+	OTA_REPO=$(git -C "$TOP" remote get-url origin 2>/dev/null |
+		sed -nE 's#^(https://|git@|ssh://git@)github\.com[:/]([^/]+/[^/]+)$#\2#p' | sed 's/\.git$//')
+fi
+RELEASE_TAG=${RELEASE_TAG:-}
 
 # --- Source tree --------------------------------------------------------------
 if [ ! -d "$SRC/.git" ]; then
@@ -68,7 +78,6 @@ if [ "$(cat .ra81-nss-stamp 2>/dev/null)" != "$STAMP" ] || [ -n "$CLEAN" ]; then
 	git clean -q -fd -- target package
 	git -c user.name=ra81-nss-build -c user.email=ra81-nss-build@localhost \
 		am -q --keep-cr "$TOP"/patches/*.patch
-	cp "$TOP/upstream/feeds.conf" feeds.conf
 	# A patch touches package/kernel/mac80211/ath.mk, which the package
 	# metadata cache does not track: drop the cache so defconfig sees it.
 	rm -rf tmp/info
@@ -77,6 +86,10 @@ fi
 
 mkdir -p "$DL_DIR"
 [ -e dl ] || ln -s "$DL_DIR" dl
+
+# This repository's own packages, as a local feed
+grep -v '^src-link ra81 ' "$TOP/upstream/feeds.conf" > feeds.conf
+echo "src-link ra81 $TOP/feeds/ra81" >> feeds.conf
 
 ./scripts/feeds update -a
 ./scripts/feeds install -a
@@ -95,22 +108,25 @@ for PROFILE in "${PROFILES[@]}"; do
 	mkdir -p files/etc/ra81-nss
 	cp -a "$TOP/overlays/common/." files/
 	for o in "${OVERLAYS[@]}"; do cp -a "$o/." files/; done
+	[ ! -s "$TOP/keys/release.pub" ] || cp "$TOP/keys/release.pub" files/etc/ra81-nss/release.pub
 	cp "$TOP/profiles/$PROFILE.packages" files/etc/ra81-nss/profile.packages
 	cat > files/etc/ra81-nss/build-info <<-EOF
 		PROFILE=$PROFILE
+		RELEASE_TAG=$RELEASE_TAG
+		OTA_REPO=$OTA_REPO
 		REPO_COMMIT=$REPO_COMMIT
 		UPSTREAM_COMMIT=$OPENWRT_COMMIT
 		BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 	EOF
 
 	cp "$TOP/configs/ra81-nss.config" .config
-	"$TOP/scripts/profile.sh" apply "$TOP/profiles/$PROFILE.packages" .config
+	"$TOP/scripts/profile.sh" apply .config "$TOP/configs/base.packages" "$TOP/profiles/$PROFILE.packages"
 	make defconfig >/dev/null
 	# defconfig drops a symbol it cannot select without a word; here that is an error
 	dropped=$(grep -E '^CONFIG_[A-Za-z0-9_-]+=' "$TOP/configs/ra81-nss.config" | while read -r l; do
 		grep -qxF "$l" .config || echo "$l"; done)
 	[ -z "$dropped" ] || { echo "defconfig dropped from configs/ra81-nss.config:" >&2; echo "$dropped" >&2; exit 1; }
-	"$TOP/scripts/profile.sh" check "$TOP/profiles/$PROFILE.packages" .config
+	"$TOP/scripts/profile.sh" check .config "$TOP/configs/base.packages" "$TOP/profiles/$PROFILE.packages"
 
 	rm -f "$BIN"/*xiaomi_redmi-ax3000*
 	make -j"$JOBS" download

@@ -1,0 +1,9 @@
+# Packages every profile gets. A profile can leave one out with "-name".
+#
+# Firmware updates from this repository's GitHub releases (feeds/ra81/):
+# System -> Firmware Update in LuCI, or "ra81-ota" on the command line.
+# To build without them, put these two lines in your profile:
+#   -luci-app-ra81-ota
+#   -ra81-ota
+ra81-ota
+luci-app-ra81-ota

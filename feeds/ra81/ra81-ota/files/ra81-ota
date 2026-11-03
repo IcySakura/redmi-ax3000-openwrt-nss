@@ -1,0 +1,306 @@
+#!/bin/sh
+# Over-the-air updates from the GitHub releases of a build repository.
+#
+#   ra81-ota status          installed firmware, trial and job state (JSON)
+#   ra81-ota check           look up the newest release (JSON)
+#   ra81-ota upgrade [-y]    download, verify and flash the newest release
+#   ra81-ota start           the same, detached (used by LuCI); see "status"
+#   ra81-ota confirm         keep the firmware being tried
+#   ra81-ota rollback        reboot into the previous firmware
+#
+# An upgrade is flashed into the other dual-boot slot. Its first boot is a
+# trial: the boot is not confirmed until "confirm" is run or, after
+# trial_timeout seconds, the health check passes (on_timeout=confirm).
+# A trial that is not confirmed reboots into the previous slot.
+#
+# Settings: /etc/config/ra81-ota. The release repository defaults to the one
+# that built the running image (OTA_REPO in /etc/ra81-nss/build-info).
+
+. /lib/functions.sh
+. /usr/share/libubox/jshn.sh
+. /lib/functions/xiaomi-dualboot.sh
+
+BUILD_INFO=/etc/ra81-nss/build-info
+WORK=/tmp/ra81-ota
+JOB=$WORK/job
+HOLD=/var/run/xiaomi-dualboot.hold
+DEADLINE=/var/run/ra81-ota.deadline
+LAST=/etc/ra81-ota/last-result
+ENV_TRIAL=ra81_ota_trial
+
+die() {
+	echo "ra81-ota: $*" >&2
+	[ -n "$IN_JOB" ] && job_set error "$*"
+	exit 1
+}
+
+info() {
+	grep "^$1=" "$BUILD_INFO" 2>/dev/null | cut -d= -f2-
+}
+
+# Name of the running firmware for messages
+version() {
+	local tag=$(info RELEASE_TAG)
+
+	echo "${tag:-the local build from $(info BUILD_DATE)}"
+}
+
+load_config() {
+	config_load ra81-ota
+	config_get REPO main repo
+	config_get PUBKEY main pubkey /etc/ra81-nss/release.pub
+	config_get_bool PRERELEASE main prerelease 1
+	config_get_bool ALLOW_UNSIGNED main allow_unsigned 0
+	config_get TRIAL_TIMEOUT main trial_timeout 600
+	config_get ON_TIMEOUT main on_timeout confirm
+	config_get CHECK_HOST main check_host
+	[ -n "$REPO" ] || REPO=$(info OTA_REPO)
+	PROFILE=$(info PROFILE)
+}
+
+job_set() {
+	mkdir -p "$WORK"
+	printf '%s\n%s\n' "$1" "$2" > "$JOB.tmp" && mv "$JOB.tmp" "$JOB"
+	logger -t ra81-ota "$1${2:+: $2}"
+}
+
+uptime_s() {
+	cut -d. -f1 /proc/uptime
+}
+
+# The running slot is on trial if U-Boot booted it after an upgrade and the
+# boot has not been confirmed yet (see /lib/functions/xiaomi-dualboot.sh).
+in_trial() {
+	[ "$(xiaomi_dualboot_getenv flag_ota_reboot)" = 1 ] &&
+	[ "$(xiaomi_dualboot_getenv flag_boot_success)" = 0 ]
+}
+
+fetch() {
+	uclient-fetch -q -T 30 -O "$2" "$1" || { rm -f "$2"; return 1; }
+}
+
+# Newest release (drafts skipped, prereleases unless disabled) -> $WORK/release.*
+find_release() {
+	local i=0 pre draft names
+
+	[ -n "$REPO" ] || die "no release repository configured (ra81-ota.main.repo)"
+	[ -n "$PROFILE" ] || die "unknown image profile (no PROFILE in $BUILD_INFO)"
+	mkdir -p "$WORK"
+	fetch "https://api.github.com/repos/$REPO/releases?per_page=20" "$WORK/releases.json" ||
+		die "cannot fetch the release list of $REPO"
+
+	while :; do
+		REL_TAG=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].tag_name")
+		[ -n "$REL_TAG" ] || die "no release of $REPO has an image for profile $PROFILE"
+		draft=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].draft")
+		pre=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].prerelease")
+		if [ "$draft" != true ] && { [ "$pre" != true ] || [ "$PRERELEASE" = 1 ]; }; then
+			names=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].assets[*].name")
+			REL_IMAGE=$(echo "$names" | grep -e "-$PROFILE-squashfs-sysupgrade\.bin$" | head -n1)
+			[ -n "$REL_IMAGE" ] && break
+		fi
+		i=$((i + 1))
+	done
+
+	REL_DATE=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].published_at")
+	REL_URL=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].html_url")
+	REL_SIZE=$(jsonfilter -i "$WORK/releases.json" -e "@[$i].assets[@.name='$REL_IMAGE'].size")
+	REL_SIGNED=0
+	echo "$names" | grep -qx sha256sums.sig && REL_SIGNED=1
+	REL_BASE="https://github.com/$REPO/releases/download/$REL_TAG"
+	rm -f "$WORK/releases.json"
+}
+
+cmd_status() {
+	local slot state msg deadline left=0 got=0
+
+	load_config
+	slot=$(xiaomi_dualboot_slot)
+
+	json_init
+	json_add_object installed
+	json_add_string tag "$(info RELEASE_TAG)"
+	json_add_string profile "$PROFILE"
+	json_add_string repo "$(info OTA_REPO)"
+	json_add_string commit "$(info REPO_COMMIT)"
+	json_add_string date "$(info BUILD_DATE)"
+	json_close_object
+	json_add_string repo "$REPO"
+	json_add_int slot "${slot:--1}"
+
+	json_add_object trial
+	if in_trial; then
+		json_add_boolean active 1
+		json_add_boolean held "$([ -e "$HOLD" ] && echo 1 || echo 0)"
+		deadline=$(cat "$DEADLINE" 2>/dev/null)
+		[ -n "$deadline" ] && left=$((deadline - $(uptime_s)))
+		[ "$left" -lt 0 ] && left=0
+		json_add_int remaining "$left"
+		json_add_string on_timeout "$ON_TIMEOUT"
+	else
+		json_add_boolean active 0
+	fi
+	json_close_object
+
+	json_add_object job
+	if [ -s "$JOB" ]; then
+		state=$(sed -n 1p "$JOB")
+		msg=$(sed -n 2p "$JOB")
+		json_add_string state "$state"
+		json_add_string message "$msg"
+		if [ "$state" = downloading ]; then
+			got=$(wc -c < "$WORK/firmware.bin" 2>/dev/null || echo 0)
+			json_add_int received "$got"
+		fi
+	else
+		json_add_string state idle
+	fi
+	json_close_object
+
+	[ -s "$LAST" ] && json_add_string last_result "$(cat "$LAST")"
+	json_dump
+}
+
+cmd_check() {
+	local installed
+
+	load_config
+	find_release
+	installed=$(info RELEASE_TAG)
+
+	json_init
+	json_add_string repo "$REPO"
+	json_add_string tag "$REL_TAG"
+	json_add_string date "$REL_DATE"
+	json_add_string url "$REL_URL"
+	json_add_string image "$REL_IMAGE"
+	json_add_int size "${REL_SIZE:-0}"
+	json_add_boolean signed "$REL_SIGNED"
+	json_add_string installed "$installed"
+	json_add_boolean update_available "$([ "$REL_TAG" != "$installed" ] && echo 1 || echo 0)"
+	json_dump
+}
+
+cmd_upgrade() {
+	local sum
+
+	load_config
+	in_trial && die "the running firmware is on trial: confirm or roll it back first"
+	[ "$(xiaomi_dualboot_slot)" ] || die "cannot tell the running slot; not a dual-boot RA81?"
+
+	job_set checking "Looking up the newest release of $REPO"
+	find_release
+	[ "$REL_SIGNED" = 1 ] || [ "$ALLOW_UNSIGNED" = 1 ] ||
+		die "release $REL_TAG is not signed (set ra81-ota.main.allow_unsigned=1 to accept that)"
+
+	if [ "$1" != -y ]; then
+		echo "Install $REL_TAG ($REL_IMAGE) from $REPO into the other slot? [y/N]"
+		read -r answer
+		[ "$answer" = y ] || exit 1
+	fi
+
+	rm -f "$WORK/firmware.bin" "$WORK/sha256sums" "$WORK/sha256sums.sig"
+	job_set downloading "$REL_TAG: $REL_IMAGE ($REL_SIZE bytes)"
+	fetch "$REL_BASE/sha256sums" "$WORK/sha256sums" || die "cannot download sha256sums"
+	fetch "$REL_BASE/$REL_IMAGE" "$WORK/firmware.bin" || die "cannot download $REL_IMAGE"
+
+	job_set verifying "$REL_TAG"
+	if [ "$REL_SIGNED" = 1 ]; then
+		[ -s "$PUBKEY" ] || die "no public key at $PUBKEY"
+		fetch "$REL_BASE/sha256sums.sig" "$WORK/sha256sums.sig" || die "cannot download sha256sums.sig"
+		usign -V -q -m "$WORK/sha256sums" -p "$PUBKEY" ||
+			die "the signature of $REL_TAG does not match $PUBKEY"
+	fi
+	sum=$(awk -v f="$REL_IMAGE" '$2 == f || $2 == "*" f { print $1 }' "$WORK/sha256sums")
+	[ -n "$sum" ] || die "$REL_IMAGE is not listed in sha256sums"
+	[ "$(sha256sum "$WORK/firmware.bin" | cut -d' ' -f1)" = "$sum" ] ||
+		die "checksum mismatch for $REL_IMAGE"
+	sysupgrade -T "$WORK/firmware.bin" >/dev/null 2>&1 ||
+		die "sysupgrade rejects $REL_IMAGE (wrong board?)"
+
+	# Picked up by the new firmware's boot: hold the confirmation (see
+	# /etc/init.d/ra81-ota). Cleared again if the upgrade does not start.
+	xiaomi_dualboot_setenv "$ENV_TRIAL $REL_TAG" || die "cannot write the U-Boot environment"
+	rm -f "$LAST"
+	job_set flashing "$REL_TAG: writing the other slot, then rebooting"
+	sync
+	sysupgrade "$WORK/firmware.bin"
+	xiaomi_dualboot_setenv "$ENV_TRIAL"
+	die "sysupgrade failed"
+}
+
+cmd_start() {
+	mkdir -p "$WORK"
+	case "$(sed -n 1p "$JOB" 2>/dev/null)" in
+	checking|downloading|verifying|flashing) die "an update is already running" ;;
+	esac
+	job_set checking "Starting"
+	IN_JOB=1 /usr/sbin/ra81-ota upgrade -y </dev/null >/dev/null 2>&1 &
+	echo "started"
+}
+
+# Keep the trial firmware: confirm the boot so U-Boot stays on this slot.
+cmd_confirm() {
+	in_trial || die "the running firmware is not on trial"
+	xiaomi_dualboot_confirm || die "cannot write the U-Boot environment"
+	xiaomi_dualboot_setenv "$ENV_TRIAL"
+	rm -f "$HOLD" "$DEADLINE"
+	mkdir -p "${LAST%/*}"
+	echo "Kept $(version) on $(date)" > "$LAST"
+	logger -t ra81-ota "trial confirmed"
+	/etc/init.d/ra81-ota stop 2>/dev/null
+	echo "confirmed"
+}
+
+# An unconfirmed trial boot rolls back on the next reset.
+cmd_rollback() {
+	in_trial || die "the running firmware is not on trial; flash the previous release instead"
+	logger -t ra81-ota "trial rejected, rebooting into the previous slot"
+	echo "rebooting into the previous firmware"
+	sync
+	reboot
+}
+
+healthy() {
+	local host=$CHECK_HOST
+
+	[ "$(ubus call network.interface.lan status 2>/dev/null | jsonfilter -e @.up)" = true ] || return 1
+	[ -n "$host" ] || host=$(ip -4 route show default | awk '{ print $3; exit }')
+	[ -z "$host" ] || ping -q -c 3 -W 2 "$host" >/dev/null 2>&1
+}
+
+# Started by the init script during a held trial boot.
+cmd_watch() {
+	local left
+
+	load_config
+	[ -s "$DEADLINE" ] || echo $(($(uptime_s) + TRIAL_TIMEOUT)) > "$DEADLINE"
+	logger -t ra81-ota "trial boot: keep or roll back within $TRIAL_TIMEOUT s, then: $ON_TIMEOUT"
+	while in_trial; do
+		left=$(($(cat "$DEADLINE") - $(uptime_s)))
+		[ "$left" -le 0 ] && break
+		sleep $((left < 10 ? left : 10))
+	done
+	in_trial || exit 0
+
+	if [ "$ON_TIMEOUT" = confirm ] && healthy; then
+		cmd_confirm
+	else
+		logger -t ra81-ota "trial not confirmed (health check $(healthy && echo passed || echo failed))"
+		cmd_rollback
+	fi
+}
+
+case "$1" in
+status) cmd_status ;;
+check) cmd_check ;;
+upgrade) shift; cmd_upgrade "$@" ;;
+start) cmd_start ;;
+confirm) cmd_confirm ;;
+rollback) cmd_rollback ;;
+watch) cmd_watch ;;
+*)
+	sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
+	exit 2
+	;;
+esac

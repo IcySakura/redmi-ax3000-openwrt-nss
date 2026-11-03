@@ -1,0 +1,31 @@
+From 40f8c4b858da3f84202a11e4ee3537a7b5e65daf Mon Sep 17 00:00:00 2001
+From: Myles Liu <lyx981mike@gmail.com>
+Date: Mon, 2 Nov 2026 15:58:30 -0800
+Subject: [PATCH] qualcommax: ipq50xx: redmi-ax3000: allow holding the boot
+ confirmation
+
+A boot that U-Boot is trying after an upgrade is confirmed at the end of
+init. Skip that when /var/run/xiaomi-dualboot.hold exists, so that an
+updater can keep the new firmware on trial until the user (or a health
+check) accepts it. An unconfirmed trial rolls back on the next reset.
+---
+ .../qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot   | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot b/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot
+index 2343293..b9ef12d 100755
+--- a/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot
++++ b/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot
+@@ -5,6 +5,9 @@ START=99
+ boot() {
+ 	case $(board_name) in
+ 	xiaomi,redmi-ax3000)
++		# Something else (e.g. an OTA updater's trial) confirms this boot
++		[ -e /var/run/xiaomi-dualboot.hold ] && return 0
++
+ 		. /lib/functions/xiaomi-dualboot.sh
+ 		xiaomi_dualboot_confirm
+ 		;;
+-- 
+2.56.0
+

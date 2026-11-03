@@ -111,6 +111,16 @@ for s in etc/init.d/xiaomi-dualboot lib/functions/xiaomi-dualboot.sh lib/upgrade
 	check "sh -n /$s" "sh -n '$R/$s'"
 done
 
+check "dual-boot confirmation can be held" "grep -q xiaomi-dualboot.hold '$R/etc/init.d/xiaomi-dualboot'"
+if [ -e "$R/usr/sbin/ra81-ota" ]; then
+	check "sh -n /usr/sbin/ra81-ota" "sh -n '$R/usr/sbin/ra81-ota'"
+	check "ra81-ota init enabled (S98, before the S99 confirmation)" "ls '$R'/etc/rc.d/ | grep -q '^S98ra81-ota$'"
+	check "LuCI view for ra81-ota" "[ -e '$R/www/luci-static/resources/view/ra81-ota.js' ]"
+	check "release key for ra81-ota" "[ -s '$R/etc/ra81-nss/release.pub' ]"
+	grep -q '^OTA_REPO=.' "$R/etc/ra81-nss/build-info" ||
+		echo "  NOTE no OTA_REPO in build-info: set ra81-ota.main.repo on the router"
+fi
+
 echo "== sysupgrade.bin"
 if [ -s "$SYSUPG" ]; then
 	tar tf "$SYSUPG" > "$WORK/tar.txt" 2>/dev/null

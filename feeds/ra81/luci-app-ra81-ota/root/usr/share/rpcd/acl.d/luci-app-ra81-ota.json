@@ -1,0 +1,20 @@
+{
+	"luci-app-ra81-ota": {
+		"description": "Grant access to firmware updates (ra81-ota)",
+		"read": {
+			"file": {
+				"/usr/sbin/ra81-ota status": [ "exec" ],
+				"/usr/sbin/ra81-ota check": [ "exec" ]
+			},
+			"uci": [ "ra81-ota" ]
+		},
+		"write": {
+			"file": {
+				"/usr/sbin/ra81-ota start": [ "exec" ],
+				"/usr/sbin/ra81-ota confirm": [ "exec" ],
+				"/usr/sbin/ra81-ota rollback": [ "exec" ]
+			},
+			"uci": [ "ra81-ota" ]
+		}
+	}
+}

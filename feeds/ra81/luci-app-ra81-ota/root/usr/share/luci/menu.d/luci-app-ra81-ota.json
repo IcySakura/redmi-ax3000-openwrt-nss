@@ -1,0 +1,13 @@
+{
+	"admin/system/ra81-ota": {
+		"title": "Firmware Update",
+		"order": 75,
+		"action": {
+			"type": "view",
+			"path": "ra81-ota"
+		},
+		"depends": {
+			"acl": [ "luci-app-ra81-ota" ]
+		}
+	}
+}

@@ -1,0 +1,30 @@
+#!/bin/sh /etc/rc.common
+# Holds the boot confirmation of firmware installed by "ra81-ota upgrade"
+# (the xiaomi-dualboot service at S99 confirms boots that are not held), and
+# records a rollback when the previous firmware comes back.
+
+START=98
+USE_PROCD=1
+
+start_service() {
+	local trial
+
+	. /lib/functions/xiaomi-dualboot.sh
+	trial=$(xiaomi_dualboot_getenv ra81_ota_trial)
+	[ -n "$trial" ] || return 0
+
+	if [ "$(xiaomi_dualboot_getenv flag_ota_reboot)" = 1 ] &&
+	   [ "$(xiaomi_dualboot_getenv flag_boot_success)" = 0 ]; then
+		touch /var/run/xiaomi-dualboot.hold
+		procd_open_instance
+		procd_set_param command /usr/sbin/ra81-ota watch
+		procd_close_instance
+	else
+		# Not on trial with the marker still set: U-Boot went back to the
+		# previous slot, which is this one.
+		mkdir -p /etc/ra81-ota
+		echo "Update to $trial was rolled back on $(date)" > /etc/ra81-ota/last-result
+		logger -t ra81-ota "update to $trial was rolled back"
+		xiaomi_dualboot_setenv ra81_ota_trial
+	fi
+}
