@@ -30,7 +30,9 @@ Actions (or locally) that can update themselves from its releases. The NSS work 
 | Factory MAC addresses | ✅ |
 | WAN port with NSS | ✅ tested |
 | Reset and mesh buttons (mesh = WPS) | ✅ |
-| LAN1-3 with NSS, LEDs, PPPoE, VLANs | ⚠️ built in, not tested on an RA81 yet |
+| Wired clients (LAN1, bridged access point: 936 Mbit/s, CPU idle) | ✅ |
+| Fast roaming (802.11r/k/v) with another OpenWrt access point | ✅ configured |
+| LAN2/LAN3, LEDs, PPPoE, VLANs | ⚠️ built in, not tested on an RA81 yet |
 | 802.11s mesh offload | ❌ not in the 256 MB profile (mesh on the host path: `mesh` profile) |
 
 Tested on one RA81 unit. Reports from other units are welcome.
