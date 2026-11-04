@@ -12,7 +12,9 @@
 
 import { readfile } from 'fs';
 
-const [ versions_file, components_file, profile_file, tag, url ] = ARGV;
+// (no destructuring: the ucode of older images cannot parse it)
+const versions_file = ARGV[0], components_file = ARGV[1], profile_file = ARGV[2],
+	tag = ARGV[3], url = ARGV[4];
 
 function apk_db(path) {
 	let pkgs = {}, name;
