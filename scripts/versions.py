@@ -73,9 +73,12 @@ def components(repo_url, repo_commit, third_party=None):
     if third_party and os.path.exists(third_party):
         for line in open(third_party):
             f = line.split("#")[0].split()
-            if len(f) == 5:
-                comps.append({"id": "third/" + f[0], "name": f[0], "url": web_url(f[1]),
-                              "commit": f[3]})
+            if len(f) >= 5:
+                comp = {"id": "third/" + f[0], "name": f[0], "url": web_url(f[1]), "commit": f[3]}
+                if len(f) >= 6:
+                    comp["release"] = f[5]
+                    comp["release_url"] = "%s/releases/tag/%s" % (comp["url"], f[5])
+                comps.append(comp)
     return comps
 
 
@@ -89,7 +92,8 @@ def manifest(path):
 
 
 def gh_compare(url, a, b):
-    """Commit titles from a to b, or None if GitHub cannot tell."""
+    """(commits ahead, commits behind, titles) from a to b, or None if GitHub
+    cannot tell."""
     m = re.match(r"^https://github\.com/([^/]+/[^/]+)$", url)
     if not m:
         return None
@@ -101,7 +105,15 @@ def gh_compare(url, a, b):
     except Exception:
         return None
     titles = [c["commit"]["message"].splitlines()[0] for c in d.get("commits", [])]
-    return d.get("ahead_by", len(titles)), list(reversed(titles))
+    return d.get("ahead_by", len(titles)), d.get("behind_by", 0), list(reversed(titles))
+
+
+def count(cmp):
+    ahead, behind = cmp[0], cmp[1]
+    n = lambda k: "%d commit%s" % (k, "" if k == 1 else "s")
+    if behind and not ahead:
+        return n(behind) + " back"
+    return n(ahead) + (", %d back" % behind if behind else "")
 
 
 def key_packages(files):
@@ -143,13 +155,13 @@ def sources_notes(new, old, old_tag):
         link = "%s/compare/%s...%s" % (c["url"], o["commit"][:12], c["commit"][:12])
         cmp = gh_compare(c["url"], o["commit"], c["commit"]) if c["url"].startswith("https://github.com/") else None
         if c.get("release") and c.get("release") != o.get("release"):
-            line += " %s → [%s](%s)" % (o.get("release", "?"), c["release"], c.get("release_url", c["url"]))
+            line += " %s[%s](%s)" % (o["release"] + " → " if o.get("release") else "",
+                                      c["release"], c.get("release_url", c["url"]))
         line += ": `%s` → `%s` ([%s](%s))" % (
-            o["commit"][:7], c["commit"][:7],
-            "%d commits" % cmp[0] if cmp else "compare", link)
+            o["commit"][:7], c["commit"][:7], count(cmp) if cmp else "compare", link)
         changed.append(line)
         if cmp:
-            for t in cmp[1][:MAX_COMMITS]:
+            for t in cmp[2][:MAX_COMMITS]:
                 changed.append("  - " + t.replace("|", "\\|"))
             if cmp[0] > MAX_COMMITS:
                 changed.append("  - … and %d more" % (cmp[0] - MAX_COMMITS))
