@@ -1,0 +1,6 @@
+#!/bin/sh
+# Remember the theme as it was before the themes' own uci-defaults
+# (30_luci-theme-*) run: some (Aurora) make themselves the theme when first
+# installed. 99-default-theme decides from this.
+uci -q get luci.main.mediaurlbase > /tmp/.theme-before-uci-defaults
+exit 0

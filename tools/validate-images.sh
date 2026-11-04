@@ -122,7 +122,7 @@ if [ -e "$R/usr/sbin/ra81-ota" ]; then
 		echo "  NOTE no OTA_REPO in build-info: set ra81-ota.main.repo on the router"
 fi
 
-check "default theme switch (uci-defaults/99-default-theme)" "[ -x '$R/etc/uci-defaults/99-default-theme' ]"
+check "default theme switch (uci-defaults/29- and 99-default-theme)" "[ -x '$R/etc/uci-defaults/29-default-theme' ] && [ -x '$R/etc/uci-defaults/99-default-theme' ]"
 # Package sources must all exist on downloads.openwrt.org (apk update fails otherwise)
 check "package sources: only feeds OpenWrt publishes" "! grep -E '^https?://' '$R/etc/apk/repositories.d/distfeeds.list' | grep -vqE '/(targets/[^/]+/[^/]+/packages|packages/[^/]+/(base|packages|luci|routing|telephony|video))/packages\\.adb\$'"
 
