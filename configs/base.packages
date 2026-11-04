@@ -12,3 +12,8 @@ luci-app-ra81-ota
 # routers still on Bootstrap (overlays/common/etc/uci-defaults/99-default-theme).
 # To build without it: "-luci-theme-footstrap" in your profile.
 luci-theme-footstrap
+
+# Status page: LuCI's Dashboard (router, resources, live traffic, LAN devices,
+# Wi-Fi clients), LuCI's landing page. To build without it:
+# "-luci-mod-dashboard" in your profile.
+luci-mod-dashboard
