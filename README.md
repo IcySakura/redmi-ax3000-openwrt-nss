@@ -173,7 +173,7 @@ profile ([below](#packages)), so the image you
 upgrade to already contains it. The image records its build in
 `/etc/ra81-nss/build-info`.
 
-- **In LuCI:** *System → Firmware Update* → *Show releases* → *Install*
+- **In LuCI:** *System → Firmware Update* → *Install*
   (see [Firmware updates](#firmware-updates)).
 - **On the command line:** `ra81-ota check`, then `ra81-ota upgrade`.
 - **By hand**, e.g. with an image built without the updater: use the
@@ -198,8 +198,8 @@ The images include `ra81-ota` (command line) and `luci-app-ra81-ota`
 (*System → Firmware Update*). They update the router from the GitHub releases
 of the repository that built its image:
 
-1. **Show releases** lists the releases on the router's channel (below),
-   newest first, marked newer or older than the installed firmware. Each has
+1. The page lists the releases on the router's channel (below) when it
+   opens, newest first (the five newest, the rest on demand), marked newer or older than the installed firmware. Each has
    an image for the profile the router was built with (`PROFILE` in
    `/etc/ra81-nss/build-info`).
    **What's new** on a release compares it with the firmware running now:
@@ -368,9 +368,12 @@ them and publishes a release:
 
 **Automatic builds.** Every day the workflow checks whether the upstream tree
 has published a new release (`kuncy7/openwrt-nss-edma`, `ipq50xx-*`: a tested
-commit plus the feed revisions it was built with). If it has, it moves
-`upstream/` to it (`scripts/bump-upstream.sh`), builds and validates both
-profiles, publishes them on the **testing** channel and commits the new pins.
+commit plus the feed revisions it was built with), and moves `upstream/` to
+it (`scripts/bump-upstream.sh`). If it has, or this repository has commits
+since the newest release (other than the workflow's own pin commits), it
+builds and validates both profiles, publishes them on the **testing** channel
+and commits any new pins. So there is at most one automatic build a day, and
+none on days when nothing changed.
 If upstream breaks the build or the patches no longer apply, nothing is
 published and the failed run notifies you. Nothing is ever installed
 automatically: routers only update when you choose a release. (GitHub pauses

@@ -18,7 +18,8 @@ on:
         options: [testing, stable, none]
         default: testing
   schedule:
-    # Daily: build and publish to "testing" when upstream has a new release.
+    # Daily: build and publish to "testing" when upstream has a new release, or
+    # this repository has commits since the newest release.
     - cron: "17 5 * * *"
 
 permissions:
@@ -45,6 +46,9 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          # the whole history, to compare with the newest release's tag
+          fetch-depth: 0
 
       - name: Validate inputs
         run: |
@@ -61,15 +65,32 @@ jobs:
         run: |
           scripts/bump-upstream.sh | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Look for commits since the newest release
+        id: commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The bot's own commits only record the pins of a release already built
+          prev=$(gh release list --limit 1 --exclude-drafts --json tagName --jq '.[0].tagName // empty')
+          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" >/dev/null; then
+            n=$(git log --format=%an "$prev..HEAD" | grep -cvxF 'github-actions[bot]' || true)
+          else
+            n=1
+          fi
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          echo "Commits since ${prev:-the first release}: $n" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Decide
         id: plan
         env:
           CHANGED: ${{ steps.bump.outputs.changed }}
+          COMMITS: ${{ steps.commits.outputs.count }}
         run: |
-          # A scheduled run only builds when upstream moved
-          if [ "${{ github.event_name }}" = schedule ] && [ "$CHANGED" != true ]; then
+          # A scheduled run (at most one a day) only builds when upstream moved
+          # or this repository has new commits
+          if [ "${{ github.event_name }}" = schedule ] && [ "$CHANGED" != true ] && [ "$COMMITS" = 0 ]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "Nothing new upstream; not building." >> "$GITHUB_STEP_SUMMARY"
+            echo "Nothing new upstream or here; not building." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
