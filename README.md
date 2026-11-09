@@ -204,11 +204,13 @@ of the repository that built its image:
    `/etc/ra81-nss/build-info`).
    **What's new** on a release compares it with the firmware running now:
    the sources that changed (with their commit range on GitHub), the
-   kernel, NSS and profile packages from version to version, the count of
-   all other package changes, and the packages installed by hand that the
-   release would drop. Installing shows the same summary first. Every
-   release's notes on GitHub also say what changed since the release before
-   (built from its `versions-<profile>.json`).
+   kernel, NSS and profile packages from version to version, and the other
+   updated, added and removed packages in groups that fold open (with a
+   filter by name), including the packages installed by hand that the
+   release would drop. Installing asks first, with the counts, the warnings
+   and the same changes folded away. Every release's notes on GitHub also
+   say what changed since the release before (built from its
+   `versions-<profile>.json`).
 2. **Install** on any of them - the newest, or an older one to go back to -
    downloads it, verifies the release's `sha256sums` against the
    `usign` key in the image (`/etc/ra81-nss/release.pub`) and the image against
@@ -220,6 +222,12 @@ of the repository that built its image:
    and rolled back otherwise. If it does not boot far enough to decide, the
    next reboot rolls it back. The previous firmware stays in its slot either
    way.
+
+The **Dashboard** (LuCI's landing page) shows a notice when a newer release
+is out on the router's channel, with **Skip this release** to stop it for that
+release (in that browser). It looks the releases up when the Dashboard opens,
+at most every 6 hours; turn it off with *Update notice* in the page's settings
+(`ra81-ota.main.notify`). It also points out a firmware still on trial.
 
 The page also keeps an **update history** (installs, keeps, rollbacks; in
 `/etc/ra81-ota/history`, kept across updates) and links to all releases.

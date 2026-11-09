@@ -39,6 +39,20 @@ var css = '\
 .ota-progress { height: 6px; margin-top: 10px; border-radius: 3px; overflow: hidden; background: var(--border-color-medium, rgba(0, 0, 0, .12)); }\
 .ota-progress > i { display: block; height: 100%; background: var(--primary-color-high, #1976d2); transition: width .5s; }\
 .ota-modal h5 { margin: 14px 0 6px; }\
+.ota-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }\
+.ota-pkghead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 14px 0 6px; }\
+.ota-pkghead h5 { margin: 0; }\
+.ota-pkghead input { flex: 0 1 220px; min-width: 0; }\
+.ota-group { border-top: 1px solid var(--border-color-medium, rgba(0, 0, 0, .12)); }\
+.ota-group > summary { cursor: pointer; padding: 8px 0; font-weight: 600; }\
+.ota-group > summary small { font-weight: normal; color: var(--text-color-medium, #6b7280); margin-left: 6px; }\
+.ota-pkgs { list-style: none; margin: 0 0 10px; padding: 0; font-size: 13px; }\
+.ota-pkgs > li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 16px; padding: 3px 0; }\
+.ota-pkgs > li > :first-child { overflow-wrap: anywhere; }\
+.ota-pkgs > li > :last-child { margin-left: auto; text-align: right; color: var(--text-color-medium, #6b7280); overflow-wrap: anywhere; }\
+.ota-pkgs .label { margin-left: 6px; }\
+.ota-confirm ul { margin: 6px 0 12px 18px; }\
+.ota-confirm > .ota-group { border-bottom: 1px solid var(--border-color-medium, rgba(0, 0, 0, .12)); margin-bottom: 12px; }\
 ';
 
 function ota(cmd, arg) {
@@ -103,14 +117,6 @@ function section(title, note, body) {
 	].concat(body));
 }
 
-function table(titles, rows) {
-	return E('table', { 'class': 'table' }, [
-		E('tr', { 'class': 'tr table-titles' }, titles.map(function(t) { return E('th', { 'class': 'th' }, t); }))
-	].concat(rows.map(function(r) {
-		return E('tr', { 'class': 'tr' }, r.map(function(c) { return E('td', { 'class': 'td left' }, c); }));
-	})));
-}
-
 /* A list that shows its first SHOWN items, and the rest on demand */
 function foldList(items, open, onToggle, moreText) {
 	var nodes = [ E('ul', { 'class': 'ota-list' }, open ? items : items.slice(0, SHOWN)) ];
@@ -123,9 +129,85 @@ function foldList(items, open, onToggle, moreText) {
 	return nodes;
 }
 
-/* What installing a release changes, from "ra81-ota details" */
-function renderDetails(d, brief) {
-	var nodes = [], key, rest, byHand;
+function count(n, one, many) {
+	return (n == 1 ? one : many).format(n);
+}
+
+/* "2 sources · 41 updated · …" as labels */
+function changeChips(d) {
+	return E('div', { 'class': 'ota-chips' }, [
+		badge(d.sources.length ? count(d.sources.length, _('%d source changed'), _('%d sources changed')) : _('same sources')),
+		badge(_('%d updated').format(d.updated.length), d.updated.length ? 'notice' : ''),
+		d.added.length ? badge(_('%d added').format(d.added.length), 'success') : '',
+		d.removed.length ? badge(_('%d removed').format(d.removed.length), 'warning') : ''
+	]);
+}
+
+function pkgItem(p) {
+	var text = p.from == null ? _('%s (new)').format(p.to) : p.to == null ? p.from : '%s → %s'.format(p.from, p.to);
+
+	return E('li', { 'data-name': p.name }, [
+		E('span', {}, [ E('code', {}, p.name), p.by_hand ? badge(_('installed by hand'), 'warning') : '' ]),
+		E('span', {}, text)
+	]);
+}
+
+function sourceItem(c) {
+	var change = c.from ? '%s → %s'.format(c.from, c.to) : _('new (%s)').format(c.to);
+
+	return E('li', {}, [
+		E('span', {}, c.release && c.release_url ? [ c.name, ' (', link(c.release_url, c.release), ')' ] : c.name),
+		E('span', {}, c.url ? link(c.url, change) : change)
+	]);
+}
+
+/* A collapsible group of packages or sources; "open" ones start unfolded */
+function group(title, items, open, render) {
+	if (!items.length)
+		return '';
+
+	return E('details', { 'class': 'ota-group', 'open': open ? '' : null, 'data-open': open ? '1' : null }, [
+		E('summary', {}, [ title, E('small', {}, String(items.length)) ]),
+		E('ul', { 'class': 'ota-pkgs' }, items.map(render || pkgItem))
+	]);
+}
+
+/* Show only the packages whose name contains the text, unfolding the groups
+   with a match; an empty filter restores the groups as they were */
+function filterPackages(root, text) {
+	var q = text.trim().toLowerCase();
+
+	root.querySelectorAll('details.ota-group').forEach(function(g) {
+		var shown = 0;
+
+		g.querySelectorAll('li[data-name]').forEach(function(li) {
+			var hit = !q || li.getAttribute('data-name').toLowerCase().indexOf(q) >= 0;
+			li.style.display = hit ? '' : 'none';
+			shown += hit;
+		});
+		g.style.display = shown ? '' : 'none';
+		g.open = q ? shown > 0 : g.hasAttribute('data-open');
+	});
+}
+
+function byHand(d) {
+	return d.removed.filter(function(p) { return p.by_hand; });
+}
+
+function byHandWarning(d) {
+	var hand = byHand(d);
+
+	return hand.length ? E('p', { 'class': 'alert-message warning' },
+		_('Installed by hand on this router and not part of this release, so they will be gone after installing it: %s. Add them to your build profile to keep them.')
+			.format(hand.map(function(p) { return p.name; }).join(', '))) : '';
+}
+
+/* What installing a release changes, from "ra81-ota details": the sources,
+   then the packages in folding groups, the profile's own and the kernel and
+   NSS ones unfolded. In the install dialog ("inner") the counts and the
+   warning are shown by the dialog itself. */
+function renderDetails(d, inner) {
+	var nodes = [], key, groups, total;
 
 	if (!d.available)
 		return [ E('p', {}, [ _('This release carries no version information (it predates it).'), ' ',
@@ -134,44 +216,44 @@ function renderDetails(d, brief) {
 	if (d.compared_with == 'unknown')
 		nodes.push(E('p', {}, _('The running firmware predates version tracking: the sources below are those of the release, and its packages are compared with the ones installed now.')));
 
+	if (!inner)
+		nodes.push(changeChips(d), byHandWarning(d));
+
 	if (d.sources.length)
-		nodes.push(E('h5', {}, _('Sources')), table([ _('Source'), _('Change') ], d.sources.map(function(c) {
-			var change = c.from ? '%s → %s'.format(c.from, c.to) : _('new (%s)').format(c.to);
-			return [
-				c.release && c.release_url ? [ c.name, E('br'), link(c.release_url, c.release) ] : c.name,
-				c.url ? link(c.url, change) : change
-			];
-		})));
+		nodes.push(group(_('Sources'), d.sources, true, sourceItem));
 	else
 		nodes.push(E('p', {}, _('Built from the same sources as the running firmware.')));
 
-	key = d.updated.filter(function(p) { return p.key; });
-	rest = d.updated.filter(function(p) { return !p.key; });
-	byHand = d.removed.filter(function(p) { return p.by_hand; });
+	key = d.updated.concat(d.added).filter(function(p) { return p.key; });
+	total = d.updated.length + d.added.length + d.removed.length;
+	groups = E('div', {}, [
+		group(_('Main packages'), key, true),
+		group(_('Other updated packages'), d.updated.filter(function(p) { return !p.key; }), false),
+		group(_('Added packages'), d.added.filter(function(p) { return !p.key; }), false),
+		group(_('Removed packages'), d.removed, false)
+	]);
 
-	nodes.push(E('h5', {}, _('Packages')));
-	if (key.length)
-		nodes.push(table([ _('Package'), _('Installed'), _('New') ], key.map(function(p) {
-			return [ E('code', {}, p.name), p.from, p.to ];
-		})));
-	nodes.push(E('p', {}, _('%d updated, %d added, %d removed.').format(d.updated.length, d.added.length, d.removed.length)));
-
-	if (!brief && (rest.length || d.added.length || d.removed.length))
-		nodes.push(E('details', {}, [
-			E('summary', {}, _('All package changes')),
-			E('ul', {}, [].concat(
-				rest.map(function(p) { return E('li', {}, [ E('code', {}, p.name), ' %s → %s'.format(p.from, p.to) ]); }),
-				d.added.map(function(p) { return E('li', {}, [ E('code', {}, p.name), ' %s '.format(p.to), E('em', {}, _('(added)')) ]); }),
-				d.removed.map(function(p) { return E('li', {}, [ E('code', {}, p.name), ' %s '.format(p.from), E('em', {}, p.by_hand ? _('(installed by hand, will be gone)') : _('(removed)')) ]); })
-			))
-		]));
-
-	if (byHand.length)
-		nodes.push(E('p', { 'class': 'alert-message warning' }, _('Installed by hand on this router and not part of this release, so they will be gone after installing it: %s. Add them to your build profile to keep them.')
-			.format(byHand.map(function(p) { return p.name; }).join(', '))));
+	if (total) {
+		nodes.push(E('div', { 'class': 'ota-pkghead' }, [
+			E('h5', {}, _('Packages')),
+			total > 10 ? E('input', {
+				'type': 'search',
+				'class': 'cbi-input-text',
+				'placeholder': _('Filter packages'),
+				'input': function(ev) { filterPackages(groups, ev.target.value); }
+			}) : ''
+		]), groups);
+	}
+	else
+		nodes.push(E('p', {}, _('No package changes.')));
 
 	nodes.push(E('p', {}, link(d.url, _('Release notes on GitHub'))));
 	return nodes;
+}
+
+function minutes(s) {
+	s = +s || 0;
+	return s < 120 ? _('%d seconds').format(s) : _('%d minutes').format(Math.round(s / 60));
 }
 
 return view.extend({
@@ -204,7 +286,14 @@ return view.extend({
 
 	handleDetails: function(rel, ev) {
 		var title = _('%s compared to this firmware').format(rel.tag),
-		    close = E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')));
+		    repo = this.releases ? this.releases.repo : null,
+		    close = E('div', { 'class': 'right' }, [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')), ' ',
+			rel.relation != 'installed' && repo && !this.blocked() ? E('button', {
+				'class': 'btn important ' + (rel.relation == 'newer' ? 'cbi-button-action' : 'cbi-button-neutral'),
+				'click': ui.createHandlerFn(this, 'handleUpdate', rel, repo)
+			}, _('Install…')) : ''
+		    ]);
 
 		ui.showModal(title, [ E('p', { 'class': 'spinning' }, _('Comparing…')) ]);
 		return ota('details', rel.tag).then(function(d) {
@@ -221,17 +310,30 @@ return view.extend({
 		}, this));
 	},
 
+	/* Short: what happens and what to look out for; the changes fold away */
 	confirmUpdate: function(rel, repo, details) {
-		var older = rel.relation == 'older';
+		var older = rel.relation == 'older',
+		    known = details && details.available,
+		    timeout = uci.get('ra81-ota', 'main', 'trial_timeout') || 600,
+		    keep = (uci.get('ra81-ota', 'main', 'on_timeout') || 'confirm') == 'confirm';
 
-		ui.showModal(_('Install %s?').format(rel.tag), [
-			details ? E('div', { 'class': 'cbi-section ota-modal' }, [ E('h4', {}, _('What changes')) ].concat(renderDetails(details, true))) : '',
+		ui.showModal(_('Install %s?').format(rel.tag), [ E('div', { 'class': 'ota-modal ota-confirm' }, [
 			older ? E('p', { 'class': 'alert-message warning' },
 				_('This release is older than the installed firmware. Your current settings are kept and may include options the older firmware does not know; this is usually harmless, but not guaranteed.')) : '',
-			E('p', {}, _('%s (%1024.2mB) will be downloaded from %s, verified and written to the other firmware slot. The router then reboots into it; settings are kept.')
-				.format(rel.image, rel.size, repo)),
-			E('p', {}, _('The new firmware starts on trial: keep it on this page afterwards, or it will be kept or rolled back automatically when the trial period ends (see the settings below).')),
-			E('p', {}, _('Packages installed by hand with apk are not carried over: add them to your build profile instead.')),
+			known ? byHandWarning(details) : '',
+			known ? changeChips(details) : '',
+			known ? E('details', { 'class': 'ota-group' }, [
+				E('summary', {}, _('All changes')),
+				E('div', {}, renderDetails(details, true))
+			]) : E('p', {}, [ details ? _('This release carries no version information.') : _('Could not compare this release with the running firmware.'), ' ',
+				link(rel.url, _('Release notes on GitHub')) ]),
+			E('ul', {}, [
+				E('li', {}, _('%s (%1024.2mB) is downloaded from %s, its signature checked, and written to the other firmware slot.').format(rel.image, rel.size, repo)),
+				E('li', {}, _('The router restarts into it, which takes a few minutes. Settings are kept; packages installed by hand with apk are not.')),
+				E('li', {}, (keep
+					? _('Then you have %s to keep it or roll back on this page; after that it is kept if the network is up, or rolled back if not.')
+					: _('Then you have %s to keep it on this page; after that it is rolled back.')).format(minutes(timeout)))
+			]),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 				E('button', {
@@ -245,7 +347,7 @@ return view.extend({
 					})
 				}, older ? _('Install older release') : _('Install'))
 			])
-		]);
+		]) ]);
 	},
 
 	handleConfirm: function(ev) {
@@ -496,6 +598,10 @@ return view.extend({
 			return uci.get('ra81-ota', section_id, 'channel') ||
 				(uci.get('ra81-ota', section_id, 'prerelease') == '1' ? 'testing' : 'stable');
 		};
+
+		o = s.option(form.Flag, 'notify', _('Update notice'),
+			_('Show a notice on the Dashboard when a newer release is out. Looked up when the Dashboard opens, at most every 6 hours.'));
+		o.default = '1';
 
 		o = s.option(form.Value, 'trial_timeout', _('Trial period'),
 			_('Seconds a newly installed firmware waits for you to keep or roll it back.'));

@@ -4,6 +4,8 @@
 #   ra81-ota status              installed firmware, trial and job state (JSON)
 #   ra81-ota list                releases on the channel, newest first (JSON)
 #   ra81-ota check               the newest release on the channel (JSON)
+#   ra81-ota notice              the same for the Dashboard's update notice,
+#                                from a release list up to 6 hours old (JSON)
 #   ra81-ota details [TAG]       what installing a release would change (JSON)
 #   ra81-ota upgrade [-y] [TAG]  download, verify and flash a release
 #                                (default: the newest on the channel)
@@ -67,6 +69,7 @@ load_config() {
 	config_get TRIAL_TIMEOUT main trial_timeout 600
 	config_get ON_TIMEOUT main on_timeout confirm
 	config_get CHECK_HOST main check_host
+	config_get_bool NOTIFY main notify 1
 	[ -n "$REPO" ] || REPO=$(info OTA_REPO)
 	PROFILE=$(info PROFILE)
 }
@@ -95,16 +98,25 @@ in_trial() {
 	[ "$(xiaomi_dualboot_getenv flag_boot_success)" = 0 ]
 }
 
+# (into a temporary file first: another command may be reading the old one)
 fetch() {
-	uclient-fetch -q -T 30 -O "$2" "$1" || { rm -f "$2"; return 1; }
+	uclient-fetch -q -T 30 -O "$2.part" "$1" && mv "$2.part" "$2" || { rm -f "$2.part"; return 1; }
 }
 
+# The release list; with $1, one fetched up to $1 seconds ago will do
 fetch_releases() {
+	local list=$WORK/releases.json age
+
 	[ -n "$REPO" ] || die "no release repository configured (ra81-ota.main.repo)"
 	[ -n "$PROFILE" ] || die "unknown image profile (no PROFILE in $BUILD_INFO)"
 	mkdir -p "$WORK"
-	fetch "https://api.github.com/repos/$REPO/releases?per_page=30" "$WORK/releases.json" ||
+	if [ -n "$1" ] && [ -s "$list" ] && [ "$(cat "$list.repo" 2>/dev/null)" = "$REPO" ]; then
+		age=$(($(date +%s) - $(date -r "$list" +%s)))
+		[ "$age" -ge 0 ] && [ "$age" -lt "$1" ] && return 0
+	fi
+	fetch "https://api.github.com/repos/$REPO/releases?per_page=30" "$list" ||
 		die "cannot fetch the release list of $REPO"
+	echo "$REPO" > "$list.repo"
 }
 
 # Release number $1 of the list (newest first) -> REL_*; fails past the end
@@ -160,12 +172,13 @@ rel_relation() {
 	fi
 }
 
-# Release $1 (any channel), or the newest one on the channel -> REL_*
+# Release $1 (any channel), or the newest one on the channel -> REL_*;
+# $2: see fetch_releases
 find_release() {
 	local i=0
 
 	case "$1" in *[!A-Za-z0-9._-]*) die "bad release name: $1" ;; esac
-	fetch_releases
+	fetch_releases "$2"
 	while rel_load $i; do
 		if [ -n "$1" ]; then
 			if [ "$REL_TAG" = "$1" ]; then
@@ -294,6 +307,20 @@ cmd_check() {
 	json_add_release "$(installed_date)"
 	json_add_string installed "$(info RELEASE_TAG)"
 	json_add_boolean update_available "$([ "$relation" = newer ] && echo 1 || echo 0)"
+	json_dump
+}
+
+cmd_notice() {
+	load_config
+	json_init
+	json_add_boolean enabled "$NOTIFY"
+	if [ "$NOTIFY" = 1 ]; then
+		find_release "" 21600
+		json_add_string installed "$(info RELEASE_TAG)"
+		json_add_object release
+		json_add_release "$(installed_date)"
+		json_close_object
+	fi
 	json_dump
 }
 
@@ -436,6 +463,7 @@ case "$1" in
 status) cmd_status ;;
 list) cmd_list ;;
 check) cmd_check ;;
+notice) cmd_notice ;;
 details) cmd_details "$2" ;;
 upgrade) shift; cmd_upgrade "$@" ;;
 start) cmd_start "$2" ;;
