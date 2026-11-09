@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Myles Liu <lyx981mike@gmail.com>
 Date: Mon, 2 Nov 2026 08:03:26 -0800
-Subject: [PATCH 1/2] qualcommax: ipq50xx: add Xiaomi Redmi AX3000 (RA81) with
+Subject: [PATCH 1/3] qualcommax: ipq50xx: add Xiaomi Redmi AX3000 (RA81) with
  NSS
 
 Board support modelled on the Xiaomi CR8806 (same IPQ5000 + QCN6102 + QCA8337,
@@ -15,7 +15,7 @@ Board support modelled on the Xiaomi CR8806 (same IPQ5000 + QCN6102 + QCA8337,
 - RA81 in the ath11k 256M default and the CR8806 ECM fraglist-GRO default
 - drop the NSS bring-up debug options (serial SysRq, unrestricted /dev/mem)
 ---
- .../uboot-envtools/files/qualcommax_ipq50xx   |   3 +-
+ .../uboot-envtools/files/qualcommax_ipq50xx   |   1 +
  package/firmware/ipq-wifi/Makefile            |   2 +
  .../files/board-xiaomi_redmi-ax3000.ipq5018   | Bin 0 -> 131184 bytes
  .../files/board-xiaomi_redmi-ax3000.qcn6122   | Bin 0 -> 131184 bytes
@@ -24,15 +24,15 @@ Board support modelled on the Xiaomi CR8806 (same IPQ5000 + QCN6102 + QCA8337,
  target/linux/qualcommax/image/ipq50xx.mk      |  24 +
  .../ipq50xx/base-files/etc/board.d/01_leds    |   3 +
  .../ipq50xx/base-files/etc/board.d/02_network |   3 +-
- .../etc/hotplug.d/firmware/11-ath11k-caldata  |   4 +-
+ .../etc/hotplug.d/firmware/11-ath11k-caldata  |   2 +
  .../base-files/etc/init.d/xiaomi-dualboot     |  12 +
- .../etc/uci-defaults/15_cr8806_ecm_gro_list   |   5 +-
+ .../etc/uci-defaults/15_cr8806_ecm_gro_list   |   2 +-
  .../lib/functions/xiaomi-dualboot.sh          |  89 ++++
  .../base-files/lib/preinit/81_xiaomi_dualboot |  11 +
  .../base-files/lib/upgrade/platform.sh        |   3 +
  .../base-files/lib/upgrade/xiaomi-dualboot.sh |  31 ++
  .../linux/qualcommax/ipq50xx/config-default   |   4 -
- 17 files changed, 613 insertions(+), 9 deletions(-)
+ 17 files changed, 608 insertions(+), 7 deletions(-)
  create mode 100644 package/firmware/ipq-wifi/files/board-xiaomi_redmi-ax3000.ipq5018
  create mode 100644 package/firmware/ipq-wifi/files/board-xiaomi_redmi-ax3000.qcn6122
  create mode 100644 target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
@@ -42,24 +42,22 @@ Board support modelled on the Xiaomi CR8806 (same IPQ5000 + QCN6102 + QCA8337,
  create mode 100644 target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/xiaomi-dualboot.sh
 
 diff --git a/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx b/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
-index e577162..e304f80 100644
+index 908b0591..68e862cc 100644
 --- a/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
 +++ b/package/boot/uboot-tools/uboot-envtools/files/qualcommax_ipq50xx
-@@ -44,7 +44,8 @@ yuncore,ax830|\
- yuncore,ax850)
+@@ -45,6 +45,7 @@ yuncore,ax850)
  	ubootenv_add_mtd "0:APPSBLENV" "0x0" "0x10000" "0x10000"
  	;;
--xiaomi,cr8806)
-+xiaomi,cr8806|\
-+xiaomi,redmi-ax3000)
+ xiaomi,cr8806|\
++xiaomi,redmi-ax3000|\
+ xiaomi,redmi-ax3000-ubootmod)
  	ubootenv_add_mtd "0:appsblenv" "0x0" "0x10000" "0x20000"
  	ubootenv_add_sys_mtd "bdata" "0x0" "0x10000" "0x20000"
- 	;;
 diff --git a/package/firmware/ipq-wifi/Makefile b/package/firmware/ipq-wifi/Makefile
-index 33db856..d9256f6 100644
+index f76f9570..f8f5af3c 100644
 --- a/package/firmware/ipq-wifi/Makefile
 +++ b/package/firmware/ipq-wifi/Makefile
-@@ -133,6 +133,7 @@ ALLWIFIBOARDS:= \
+@@ -135,6 +135,7 @@ ALLWIFIBOARDS:= \
  	xiaomi_ax3600 \
  	xiaomi_ax6000 \
  	xiaomi_cr8806 \
@@ -67,7 +65,7 @@ index 33db856..d9256f6 100644
  	xiaomi_ax9000 \
  	xiaomi_mi-router-ax3000t-v2 \
  	xiaomi_redmi-ax5400 \
-@@ -355,6 +356,7 @@ $(eval $(call generate-ipq-wifi-package,xiaomi_aiot-ac2350,Xiaomi AIoT AC2350))
+@@ -359,6 +360,7 @@ $(eval $(call generate-ipq-wifi-package,xiaomi_aiot-ac2350,Xiaomi AIoT AC2350))
  $(eval $(call generate-ipq-wifi-package,xiaomi_ax3600,Xiaomi AX3600))
  $(eval $(call generate-ipq-wifi-package,xiaomi_ax6000,Xiaomi AX6000))
  $(eval $(call generate-ipq-wifi-package,xiaomi_cr8806,Xiaomi CR8806))
@@ -489,21 +487,21 @@ literal 0
 HcmV?d00001
 
 diff --git a/package/kernel/mac80211/ath.mk b/package/kernel/mac80211/ath.mk
-index fdac646..e86a535 100644
+index cd1f96a7..49c26c04 100644
 --- a/package/kernel/mac80211/ath.mk
 +++ b/package/kernel/mac80211/ath.mk
 @@ -483,7 +483,7 @@ define KernelPackage/ath11k/config
         choice
              prompt "Memory Profile"
              depends on PACKAGE_kmod-ath11k
--            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2
-+            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2
+-            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000-ubootmod
++            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000-ubootmod
              default ATH11K_MEM_PROFILE_1G
              help
              	This option allows you to select the memory profile.
 diff --git a/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
 new file mode 100644
-index 0000000..1109e40
+index 00000000..1109e40d
 --- /dev/null
 +++ b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
 @@ -0,0 +1,426 @@
@@ -934,10 +932,10 @@ index 0000000..1109e40
 +	reg = <0x0 0x40000000 0x0 0x800000>;
 +};
 diff --git a/target/linux/qualcommax/image/ipq50xx.mk b/target/linux/qualcommax/image/ipq50xx.mk
-index 067d2a5..443cade 100644
+index 8e0129f8..0ff65cc1 100644
 --- a/target/linux/qualcommax/image/ipq50xx.mk
 +++ b/target/linux/qualcommax/image/ipq50xx.mk
-@@ -253,6 +253,30 @@ define Device/xiaomi_cr8806
+@@ -256,6 +256,30 @@ define Device/xiaomi_cr8806
  endef
  TARGET_DEVICES += xiaomi_cr8806
  
@@ -965,15 +963,15 @@ index 067d2a5..443cade 100644
 +endef
 +TARGET_DEVICES += xiaomi_redmi-ax3000
 +
- define Device/glinet_gl-x2000
+ define Device/xiaomi_redmi-ax3000-ubootmod
  	$(call Device/FitImage)
- 	DEVICE_VENDOR := GL.iNet
+ 	$(call Device/UbiFit)
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
-index 0bec5b6..33f960a 100644
+index e319dd5e..0881fba8 100644
 --- a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
 +++ b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/01_leds
-@@ -58,6 +58,9 @@ tplink,archer-ax58-v2)
- xiaomi,cr8806)
+@@ -59,6 +59,9 @@ xiaomi,cr8806|\
+ xiaomi,redmi-ax3000-ubootmod)
  	ucidef_set_led_netdev "internet-blue" "INTERNET-BLUE" "blue:wan" "wan" "link"
  	;;
 +xiaomi,redmi-ax3000)
@@ -983,7 +981,7 @@ index 0bec5b6..33f960a 100644
  	ucidef_set_led_netdev "wan-port-link-top-blue" "WAN-PORT-LINK-TOP-BLUE" "blue:wan" "wan" "link_1000"
  	ucidef_set_led_netdev "wan-port-link-top-yellow" "WAN-PORT-LINK-TOP-YELLOW" "yellow:wan" "wan" "link_10 link_100"
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
-index 841e4dd..7b9fafa 100644
+index 283d604d..0d08a6dd 100644
 --- a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
 +++ b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
 @@ -38,7 +38,8 @@ ipq50xx_setup_interfaces()
@@ -997,7 +995,7 @@ index 841e4dd..7b9fafa 100644
  		;;
  	xiaomi,mi-router-ax3000t-v2)
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
-index 2a5800c..915fe93 100644
+index 68f92eb9..993cd840 100644
 --- a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
 +++ b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
 @@ -133,6 +133,7 @@ case "$FIRMWARE" in
@@ -1005,22 +1003,20 @@ index 2a5800c..915fe93 100644
  	xiaomi,ax6000|\
  	xiaomi,cr8806|\
 +	xiaomi,redmi-ax3000|\
+ 	xiaomi,redmi-ax3000-ubootmod|\
  	xiaomi,redmi-ax5400)
  		caldata_extract "0:art" 0x1000 0x20000
- 		;;
-@@ -257,7 +258,8 @@ case "$FIRMWARE" in
- 	xiaomi,mi-router-ax3000t-v2)
+@@ -259,6 +260,7 @@ case "$FIRMWARE" in
  		caldata_extract "0:art" 0x26800 0x20000
  		;;
--	xiaomi,cr8806)
-+	xiaomi,cr8806|\
-+	xiaomi,redmi-ax3000)
+ 	xiaomi,cr8806|\
++	xiaomi,redmi-ax3000|\
+ 	xiaomi,redmi-ax3000-ubootmod)
  		caldata_extract "0:art" 0x26800 0x20000
  		;;
- 	yuncore,ax830)
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot b/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot
 new file mode 100755
-index 0000000..2343293
+index 00000000..23432931
 --- /dev/null
 +++ b/target/linux/qualcommax/ipq50xx/base-files/etc/init.d/xiaomi-dualboot
 @@ -0,0 +1,12 @@
@@ -1037,24 +1033,21 @@ index 0000000..2343293
 +	esac
 +}
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/uci-defaults/15_cr8806_ecm_gro_list b/target/linux/qualcommax/ipq50xx/base-files/etc/uci-defaults/15_cr8806_ecm_gro_list
-index 54982e6..687cb71 100644
+index 921c4500..68998f7c 100644
 --- a/target/linux/qualcommax/ipq50xx/base-files/etc/uci-defaults/15_cr8806_ecm_gro_list
 +++ b/target/linux/qualcommax/ipq50xx/base-files/etc/uci-defaults/15_cr8806_ecm_gro_list
-@@ -6,7 +6,10 @@
- 
+@@ -7,7 +7,7 @@
  . /lib/functions.sh
  
--[ "$(board_name)" = "xiaomi,cr8806" ] || exit 0
-+case "$(board_name)" in
-+xiaomi,cr8806|xiaomi,redmi-ax3000) ;;
-+*) exit 0 ;;
-+esac
+ case "$(board_name)" in
+-xiaomi,cr8806|xiaomi,redmi-ax3000-ubootmod) ;;
++xiaomi,cr8806|xiaomi,redmi-ax3000|xiaomi,redmi-ax3000-ubootmod) ;;
+ *) exit 0 ;;
+ esac
  uci -q get ecm.general > /dev/null || exit 0
- 
- uci -q set ecm.general.disable_gro_list='1'
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/functions/xiaomi-dualboot.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/functions/xiaomi-dualboot.sh
 new file mode 100644
-index 0000000..6f21127
+index 00000000..6f21127b
 --- /dev/null
 +++ b/target/linux/qualcommax/ipq50xx/base-files/lib/functions/xiaomi-dualboot.sh
 @@ -0,0 +1,89 @@
@@ -1149,7 +1142,7 @@ index 0000000..6f21127
 +}
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/preinit/81_xiaomi_dualboot b/target/linux/qualcommax/ipq50xx/base-files/lib/preinit/81_xiaomi_dualboot
 new file mode 100644
-index 0000000..69f7252
+index 00000000..69f7252a
 --- /dev/null
 +++ b/target/linux/qualcommax/ipq50xx/base-files/lib/preinit/81_xiaomi_dualboot
 @@ -0,0 +1,11 @@
@@ -1165,7 +1158,7 @@ index 0000000..69f7252
 +
 +boot_hook_add preinit_main preinit_xiaomi_dualboot_arm
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
-index 9a78cfa..0528f9d 100644
+index d6b0d8f1..3c091d1c 100644
 --- a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
 +++ b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
 @@ -538,6 +538,9 @@ platform_do_upgrade() {
@@ -1180,7 +1173,7 @@ index 9a78cfa..0528f9d 100644
  		# running from and leave the other slot untouched.
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/xiaomi-dualboot.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/xiaomi-dualboot.sh
 new file mode 100644
-index 0000000..2515ecc
+index 00000000..2515eccd
 --- /dev/null
 +++ b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/xiaomi-dualboot.sh
 @@ -0,0 +1,31 @@
@@ -1216,7 +1209,7 @@ index 0000000..2515ecc
 +	nand_do_upgrade_success
 +}
 diff --git a/target/linux/qualcommax/ipq50xx/config-default b/target/linux/qualcommax/ipq50xx/config-default
-index 0517c1b..9485b2b 100644
+index 0517c1be..9485b2bf 100644
 --- a/target/linux/qualcommax/ipq50xx/config-default
 +++ b/target/linux/qualcommax/ipq50xx/config-default
 @@ -34,7 +34,3 @@ CONFIG_QCOM_TMEL_QMP_MAILBOX=y
@@ -1227,6 +1220,3 @@ index 0517c1b..9485b2b 100644
 -CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1b6
 -CONFIG_DEVMEM=y
 -# CONFIG_STRICT_DEVMEM is not set
--- 
-2.56.0
-

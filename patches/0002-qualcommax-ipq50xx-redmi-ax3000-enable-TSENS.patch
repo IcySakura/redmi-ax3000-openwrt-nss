@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Myles Liu <lyx981mike@gmail.com>
 Date: Mon, 2 Nov 2026 09:25:45 -0800
-Subject: [PATCH 2/2] qualcommax: ipq50xx: redmi-ax3000: enable TSENS
+Subject: [PATCH 2/3] qualcommax: ipq50xx: redmi-ax3000: enable TSENS
 
 The driver enables TSENS itself on IPQ5018 (init_tsens_v1_no_rpm), so the
 "not enabled by the boot firmware" reason for keeping it off no longer
@@ -13,7 +13,7 @@ critical trips demoted to hot). Keep the upstream trip points.
  1 file changed, 6 insertions(+), 5 deletions(-)
 
 diff --git a/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
-index 1109e40..56851b4 100644
+index 1109e40d..56851b47 100644
 --- a/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
 +++ b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
 @@ -109,13 +109,14 @@
@@ -36,6 +36,3 @@ index 1109e40..56851b4 100644
  };
  
  &sleep_clk {
--- 
-2.56.0
-
