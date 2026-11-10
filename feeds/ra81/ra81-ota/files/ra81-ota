@@ -98,9 +98,13 @@ in_trial() {
 	[ "$(xiaomi_dualboot_getenv flag_boot_success)" = 0 ]
 }
 
-# (into a temporary file first: another command may be reading the old one)
+# Into "$2.part" first: another command may be reading the old file. With
+# curl, not uclient-fetch: uclient stalls on a header line longer than its
+# 4 KiB buffer, as github.com sends since 2026-11 (Content-Security-Policy).
+# Gives up when a connection or the transfer stalls for 30 seconds.
 fetch() {
-	uclient-fetch -q -T 30 -O "$2.part" "$1" && mv "$2.part" "$2" || { rm -f "$2.part"; return 1; }
+	curl -fsSL --connect-timeout 30 --speed-limit 1 --speed-time 30 --retry 2 \
+		-o "$2.part" "$1" && mv "$2.part" "$2" || { rm -f "$2.part"; return 1; }
 }
 
 # The release list; with $1, one fetched up to $1 seconds ago will do
@@ -243,7 +247,7 @@ cmd_status() {
 		json_add_string state "$state"
 		json_add_string message "$msg"
 		if [ "$state" = downloading ]; then
-			got=$(wc -c < "$WORK/firmware.bin" 2>/dev/null || echo 0)
+			got=$(cat "$WORK/firmware.bin.part" "$WORK/firmware.bin" 2>/dev/null | wc -c)
 			json_add_int received "$got"
 		fi
 	else

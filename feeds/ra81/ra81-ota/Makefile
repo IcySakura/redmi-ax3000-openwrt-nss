@@ -13,7 +13,7 @@ define Package/ra81-ota
   CATEGORY:=Utilities
   TITLE:=Signed A/B firmware updates from GitHub releases (Redmi AX3000 RA81)
   DEPENDS:=@TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000 \
-	+uclient-fetch +libustream-mbedtls +ca-bundle +usign +jsonfilter +ucode +ucode-mod-fs
+	+curl +libustream-mbedtls +ca-bundle +usign +jsonfilter +ucode +ucode-mod-fs
   PKGARCH:=all
 endef
 
