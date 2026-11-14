@@ -54,10 +54,10 @@ index 908b0591..68e862cc 100644
  	ubootenv_add_mtd "0:appsblenv" "0x0" "0x10000" "0x20000"
  	ubootenv_add_sys_mtd "bdata" "0x0" "0x10000" "0x20000"
 diff --git a/package/firmware/ipq-wifi/Makefile b/package/firmware/ipq-wifi/Makefile
-index f76f9570..f8f5af3c 100644
+index 9569e6de..194896d3 100644
 --- a/package/firmware/ipq-wifi/Makefile
 +++ b/package/firmware/ipq-wifi/Makefile
-@@ -135,6 +135,7 @@ ALLWIFIBOARDS:= \
+@@ -139,6 +139,7 @@ ALLWIFIBOARDS:= \
  	xiaomi_ax3600 \
  	xiaomi_ax6000 \
  	xiaomi_cr8806 \
@@ -65,7 +65,7 @@ index f76f9570..f8f5af3c 100644
  	xiaomi_ax9000 \
  	xiaomi_mi-router-ax3000t-v2 \
  	xiaomi_redmi-ax5400 \
-@@ -359,6 +360,7 @@ $(eval $(call generate-ipq-wifi-package,xiaomi_aiot-ac2350,Xiaomi AIoT AC2350))
+@@ -367,6 +368,7 @@ $(eval $(call generate-ipq-wifi-package,xiaomi_aiot-ac2350,Xiaomi AIoT AC2350))
  $(eval $(call generate-ipq-wifi-package,xiaomi_ax3600,Xiaomi AX3600))
  $(eval $(call generate-ipq-wifi-package,xiaomi_ax6000,Xiaomi AX6000))
  $(eval $(call generate-ipq-wifi-package,xiaomi_cr8806,Xiaomi CR8806))
@@ -487,15 +487,15 @@ literal 0
 HcmV?d00001
 
 diff --git a/package/kernel/mac80211/ath.mk b/package/kernel/mac80211/ath.mk
-index cd1f96a7..49c26c04 100644
+index 07b118a5..6b33e0de 100644
 --- a/package/kernel/mac80211/ath.mk
 +++ b/package/kernel/mac80211/ath.mk
 @@ -483,7 +483,7 @@ define KernelPackage/ath11k/config
         choice
              prompt "Memory Profile"
              depends on PACKAGE_kmod-ath11k
--            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000-ubootmod
-+            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000-ubootmod
+-            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-nx30 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v1 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v2 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v3 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000-ubootmod
++            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-nx30 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v1 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v2 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v3 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000-ubootmod
              default ATH11K_MEM_PROFILE_1G
              help
              	This option allows you to select the memory profile.
@@ -932,10 +932,10 @@ index 00000000..1109e40d
 +	reg = <0x0 0x40000000 0x0 0x800000>;
 +};
 diff --git a/target/linux/qualcommax/image/ipq50xx.mk b/target/linux/qualcommax/image/ipq50xx.mk
-index 8e0129f8..0ff65cc1 100644
+index 86e7480f..cb9394bb 100644
 --- a/target/linux/qualcommax/image/ipq50xx.mk
 +++ b/target/linux/qualcommax/image/ipq50xx.mk
-@@ -256,6 +256,30 @@ define Device/xiaomi_cr8806
+@@ -314,6 +314,30 @@ define Device/xiaomi_cr8806
  endef
  TARGET_DEVICES += xiaomi_cr8806
  
@@ -981,10 +981,10 @@ index e319dd5e..0881fba8 100644
  	ucidef_set_led_netdev "wan-port-link-top-blue" "WAN-PORT-LINK-TOP-BLUE" "blue:wan" "wan" "link_1000"
  	ucidef_set_led_netdev "wan-port-link-top-yellow" "WAN-PORT-LINK-TOP-YELLOW" "yellow:wan" "wan" "link_10 link_100"
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
-index 283d604d..0d08a6dd 100644
+index 389a0899..0fd8d36e 100644
 --- a/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
 +++ b/target/linux/qualcommax/ipq50xx/base-files/etc/board.d/02_network
-@@ -38,7 +38,8 @@ ipq50xx_setup_interfaces()
+@@ -42,7 +42,8 @@ ipq50xx_setup_interfaces()
  	linksys,mx5500|\
  	linksys,spnmx56|\
  	mercusys,mr80x-v2|\
@@ -995,10 +995,10 @@ index 283d604d..0d08a6dd 100644
  		;;
  	xiaomi,mi-router-ax3000t-v2)
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
-index 68f92eb9..993cd840 100644
+index efeea063..241aa9c6 100644
 --- a/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
 +++ b/target/linux/qualcommax/ipq50xx/base-files/etc/hotplug.d/firmware/11-ath11k-caldata
-@@ -133,6 +133,7 @@ case "$FIRMWARE" in
+@@ -141,6 +141,7 @@ case "$FIRMWARE" in
  	xiaomi,mi-router-ax3000t-v2|\
  	xiaomi,ax6000|\
  	xiaomi,cr8806|\
@@ -1006,7 +1006,7 @@ index 68f92eb9..993cd840 100644
  	xiaomi,redmi-ax3000-ubootmod|\
  	xiaomi,redmi-ax5400)
  		caldata_extract "0:art" 0x1000 0x20000
-@@ -259,6 +260,7 @@ case "$FIRMWARE" in
+@@ -275,6 +276,7 @@ case "$FIRMWARE" in
  		caldata_extract "0:art" 0x26800 0x20000
  		;;
  	xiaomi,cr8806|\
@@ -1158,10 +1158,10 @@ index 00000000..69f7252a
 +
 +boot_hook_add preinit_main preinit_xiaomi_dualboot_arm
 diff --git a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
-index d6b0d8f1..3c091d1c 100644
+index cb818453..ede23a25 100644
 --- a/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
 +++ b/target/linux/qualcommax/ipq50xx/base-files/lib/upgrade/platform.sh
-@@ -538,6 +538,9 @@ platform_do_upgrade() {
+@@ -572,6 +572,9 @@ platform_do_upgrade() {
  		remove_oem_ubi_volume wifi_fw
  		nand_do_upgrade "$1"
  		;;
