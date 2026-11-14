@@ -39,9 +39,15 @@ jobs:
   plan:
     name: Plan
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: read
     outputs:
       build: ${{ steps.plan.outputs.build }}
       changed: ${{ steps.bump.outputs.changed }}
+      commits: ${{ steps.commits.outputs.count }}
+      pins: ${{ steps.plan.outputs.pins }}
+      release: ${{ steps.bump.outputs.release }}
       tag: ${{ steps.plan.outputs.tag }}
     steps:
       - name: Check out
@@ -85,12 +91,25 @@ jobs:
         env:
           CHANGED: ${{ steps.bump.outputs.changed }}
           COMMITS: ${{ steps.commits.outputs.count }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # The pins this run builds with, to recognise an upstream that is
+          # already known not to build (see "Report a held-back upstream")
+          pins=$(cat upstream/* | sha256sum | cut -c1-12)
+          echo "pins=$pins" >> "$GITHUB_OUTPUT"
+          known=
+          if [ "$CHANGED" = true ]; then
+            known=$(gh issue list --state open --label upstream-held --search "$pins in:body" \
+              --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          fi
           # A scheduled run (at most one a day) only builds when upstream moved
           # or this repository has new commits
           if [ "${{ github.event_name }}" = schedule ] && [ "$CHANGED" != true ] && [ "$COMMITS" = 0 ]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
             echo "Nothing new upstream or here; not building." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ github.event_name }}" = schedule ] && [ -n "$known" ] && [ "$COMMITS" = 0 ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "This upstream is known not to build (issue #$known) and nothing is new here; not building." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
@@ -112,6 +131,7 @@ jobs:
     timeout-minutes: 360
     permissions:
       contents: write
+      issues: write
     env:
       TAG: ${{ needs.plan.outputs.tag }}
     steps:
@@ -149,16 +169,42 @@ jobs:
             dl-
 
       - name: Build
+        id: build
         env:
+          CHANGED: ${{ needs.plan.outputs.changed }}
+          COMMITS: ${{ needs.plan.outputs.commits }}
           # recorded in the images' /etc/ra81-nss/build-info for the updater
           OTA_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ env.PUBLISH != 'none' && needs.plan.outputs.tag || '' }}
         run: |
           args=()
           for p in $PROFILES; do args+=(--profile "$p"); done
+          set +e
+          scripts/build.sh -j "$(nproc)" "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/build.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          [ "$status" != 0 ] || exit 0
+          # A failure with the pins this repository has built before is ours
+          [ "$CHANGED" = true ] || exit "$status"
+
+          # The newer upstream does not build with this repository. Hold it
+          # back: build the pinned one, so the commits here still ship, and
+          # report it (next step). A later upstream release is tried as usual.
+          echo "held=true" >> "$GITHUB_OUTPUT"
+          tail -n 80 "$RUNNER_TEMP/build.log" > "$RUNNER_TEMP/held.log"
+          echo "::warning::The newer upstream does not build with this repository; holding it back"
+          git checkout HEAD -- upstream/ patches/
+          if [ "$COMMITS" = 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream held back and nothing new here: not publishing." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "Upstream held back: building the pinned upstream for the commits here." >> "$GITHUB_STEP_SUMMARY"
+          rm -rf build/openwrt build/extra out
           scripts/build.sh -j "$(nproc)" "${args[@]}"
 
       - name: Collect release assets
+        if: steps.build.outputs.skip != 'true'
         run: |
           mkdir -p release
           for p in $PROFILES; do
@@ -174,6 +220,7 @@ jobs:
           cat release/sha256sums
 
       - name: Sign checksums
+        if: steps.build.outputs.skip != 'true'
         env:
           USIGN_SECRET_KEY: ${{ secrets.USIGN_SECRET_KEY }}
         run: |
@@ -191,6 +238,7 @@ jobs:
           build/openwrt/staging_dir/host/bin/usign -V -m release/sha256sums -p keys/release.pub
 
       - name: Upload images
+        if: steps.build.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ra81-nss-${{ github.sha }}
@@ -198,8 +246,10 @@ jobs:
           if-no-files-found: error
 
       - name: Create release
-        if: env.PUBLISH != 'none'
+        if: env.PUBLISH != 'none' && steps.build.outputs.skip != 'true'
         env:
+          HELD: ${{ steps.build.outputs.held }}
+          HELD_RELEASE: ${{ needs.plan.outputs.release }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -211,6 +261,9 @@ jobs:
             echo "- Channel: **$PUBLISH**"
             echo "- Upstream: [\`$OPENWRT_RELEASE\`](https://github.com/$repo/releases/tag/$OPENWRT_RELEASE) (\`${OPENWRT_COMMIT::12}\`)"
             echo "- Profiles: $PROFILES (see \`profiles/\`)"
+            if [ "$HELD" = true ]; then
+              echo "- Held back: the newer upstream (${HELD_RELEASE}) does not build with this repository yet; see the open \`upstream-held\` issue."
+            fi
             echo
             # What changed since the newest earlier release (its versions-<profile>.json)
             prev=$(gh release list --limit 30 --exclude-drafts --json tagName --jq '.[].tagName' | grep -vxF "$TAG" | head -n1 || true)
@@ -256,15 +309,57 @@ jobs:
             --notes-file notes.md
 
       - name: Record the new pins
-        if: needs.plan.outputs.changed == 'true'
+        if: needs.plan.outputs.changed == 'true' && steps.build.outputs.held != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           . upstream/openwrt.conf
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add upstream/
-          git commit -m "upstream: $OPENWRT_RELEASE" -m "Built and published as $TAG."
+          git add upstream/ patches/
+          merged=
+          git diff --cached --quiet -- patches/ ||
+            merged="The patches in patches/ did not apply as they were and were merged three-way onto the new upstream."
+          git commit -m "upstream: $OPENWRT_RELEASE" -m "Built and published as $TAG." ${merged:+-m "$merged"}
           for i in 1 2 3; do
-            git pull --rebase -q origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            if git pull --rebase -q origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}"; then
+              # An upstream held back earlier is superseded now
+              for n in $(gh issue list --state open --label upstream-held --json number --jq '.[].number'); do
+                gh issue close "$n" --comment "Superseded: $TAG was built with a newer upstream." || true
+              done
+              exit 0
+            fi
             sleep 5
           done
           echo "::error::could not push the new pins"; exit 1
+
+      - name: Report a held-back upstream
+        if: always() && steps.build.outputs.held == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINS: ${{ needs.plan.outputs.pins }}
+          HELD_RELEASE: ${{ needs.plan.outputs.release }}
+        run: |
+          gh label create upstream-held --color d93f0b --force \
+            --description "A newer upstream that does not build with this repository" >/dev/null
+          {
+            echo "The scheduled build could not use the newer upstream (${HELD_RELEASE}); it was held back and the pinned upstream kept."
+            echo
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- Pins: \`$PINS\` (the same upstream is not tried again by a scheduled run while this issue is open)"
+            echo
+            echo "Fix: move the pins with \`scripts/bump-upstream.sh\`, rebase \`patches/\` onto the new tree, and push; the next build closes this issue."
+            echo
+            echo "<details><summary>End of the build log</summary>"
+            echo
+            echo '\`\`\`'
+            cat "$RUNNER_TEMP/held.log"
+            echo '\`\`\`'
+            echo "</details>"
+          } > held.md
+          n=$(gh issue list --state open --label upstream-held --search "$PINS in:body" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --body-file held.md
+          else
+            gh issue create --title "Upstream held back: ${HELD_RELEASE}" --label upstream-held --body-file held.md
+          fi

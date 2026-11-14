@@ -382,11 +382,22 @@ since the newest release (other than the workflow's own pin commits), it
 builds and validates both profiles, publishes them on the **testing** channel
 and commits any new pins. So there is at most one automatic build a day, and
 none on days when nothing changed.
-If upstream breaks the build or the patches no longer apply, nothing is
-published and the failed run notifies you. Nothing is ever installed
-automatically: routers only update when you choose a release. (GitHub pauses
-scheduled workflows in repositories without activity for 60 days; the commits
-of the automatic builds count as activity.)
+
+**When upstream moves under the patches.** If the patches in `patches/` no
+longer apply to the new tree because upstream changed lines next to them,
+`scripts/build.sh` merges them three-way from the tree they were written for
+and writes the merged patches back; the workflow commits them with the new
+pins. If the new upstream still does not build (a real conflict, or a compile
+error), the run holds it back instead of failing: it builds the pinned
+upstream, so the commits here are still published, and opens an issue
+labelled `upstream-held` with the end of the build log. While that issue is
+open, scheduled runs do not try the same upstream again unless there are new
+commits here; the next build with a newer upstream closes it. A run fails, and
+notifies you, only when the pinned upstream does not build either.
+Nothing is ever installed automatically: routers only update when you choose
+a release.
+(GitHub pauses scheduled workflows in repositories without activity for 60
+days; the commits of the automatic builds count as activity.)
 
 Releases are signed when the repository has the secret `USIGN_SECRET_KEY`
 (the content of a `usign` secret key file, both lines). If you fork this

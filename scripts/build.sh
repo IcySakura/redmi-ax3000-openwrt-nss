@@ -72,16 +72,57 @@ if [ ! -d "$SRC/.git" ]; then
 fi
 
 cd "$SRC"
-STAMP=$( (echo "$OPENWRT_URL $OPENWRT_COMMIT"; cat "$TOP"/patches/*.patch "$TOP/upstream/feeds.conf") | sha256sum | cut -d' ' -f1)
+stamp() { (echo "$OPENWRT_URL $OPENWRT_COMMIT"; cat "$TOP"/patches/*.patch "$TOP/upstream/feeds.conf") | sha256sum | cut -d' ' -f1; }
+am() { git -c user.name=ra81-nss-build -c user.email=ra81-nss-build@localhost am -q --keep-cr "$@"; }
+
+# The patches do not apply to a newer upstream as they are (its lines next to
+# ours moved or changed). Merge them three-way from the commit they were made
+# for - the upstream pin of this repository's HEAD - and write the merged
+# patches back to patches/. A real conflict (upstream changed the very lines a
+# patch changes) still fails.
+merge_patches() {
+	local base p tmp i=0
+
+	base=$(git -C "$TOP" show HEAD:upstream/openwrt.conf 2>/dev/null | sed -n 's/^OPENWRT_COMMIT=//p')
+	if [ -z "$base" ] || [ "$base" = "$OPENWRT_COMMIT" ]; then
+		echo "The patches in patches/ do not apply to $OPENWRT_COMMIT." >&2
+		exit 1
+	fi
+	echo ">>> The patches do not apply as they are; merging them three-way from ${base::12}"
+	# Applying them to their own base first creates every blob the merge needs
+	git fetch -q --depth 1 origin "$base"
+	git checkout -q -f --detach "$base"
+	am "$TOP"/patches/*.patch
+	git checkout -q -f --detach "$OPENWRT_COMMIT"
+	if ! am -3 "$TOP"/patches/*.patch; then
+		echo "Conflict: the patch above does not merge with upstream ${OPENWRT_COMMIT::12}:" >&2
+		git diff --name-only --diff-filter=U >&2
+		git am --abort
+		exit 1
+	fi
+	tmp=$(mktemp -d)
+	git format-patch -q --no-signature --zero-commit -o "$tmp" "$OPENWRT_COMMIT..HEAD"
+	for p in "$TOP"/patches/*.patch; do
+		i=$((i + 1))
+		cp "$(ls "$tmp"/*.patch | sed -n "${i}p")" "$p"
+	done
+	rm -rf "$tmp"
+	echo ">>> Merged; patches/ now holds the patches as they apply to ${OPENWRT_COMMIT::12}"
+}
+
+STAMP=$(stamp)
 if [ "$(cat .ra81-nss-stamp 2>/dev/null)" != "$STAMP" ] || [ -n "$CLEAN" ]; then
 	echo ">>> Checking out $OPENWRT_COMMIT and applying patches"
 	git fetch -q --depth 1 origin "$OPENWRT_COMMIT"
 	git checkout -q -f --detach "$OPENWRT_COMMIT"
 	git clean -q -fd -- target package
-	git -c user.name=ra81-nss-build -c user.email=ra81-nss-build@localhost \
-		am -q --keep-cr "$TOP"/patches/*.patch
-	# A patch touches package/kernel/mac80211/ath.mk, which the package
-	# metadata cache does not track: drop the cache so defconfig sees it.
+	if ! am "$TOP"/patches/*.patch; then
+		git am --abort
+		merge_patches
+		STAMP=$(stamp)
+	fi
+	# The package metadata cache does not track every file a patch can
+	# touch: drop it so defconfig sees them.
 	rm -rf tmp/info
 	echo "$STAMP" > .ra81-nss-stamp
 fi
