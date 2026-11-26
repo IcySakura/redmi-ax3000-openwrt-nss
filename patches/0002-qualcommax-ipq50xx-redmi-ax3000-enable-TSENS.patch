@@ -13,7 +13,7 @@ critical trips demoted to hot). Keep the upstream trip points.
  1 file changed, 6 insertions(+), 5 deletions(-)
 
 diff --git a/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
-index 1109e40d..56851b47 100644
+index 1109e40d76..56851b47ab 100644
 --- a/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
 +++ b/target/linux/qualcommax/dts/ipq5018-redmi-ax3000.dts
 @@ -109,13 +109,14 @@
