@@ -323,15 +323,28 @@ jobs:
           git commit -m "upstream: $OPENWRT_RELEASE" -m "Built and published as $TAG." ${merged:+-m "$merged"}
           for i in 1 2 3; do
             if git pull --rebase -q origin "${GITHUB_REF_NAME}" && git push -q origin "HEAD:${GITHUB_REF_NAME}"; then
-              # An upstream held back earlier is superseded now
-              for n in $(gh issue list --state open --label upstream-held --json number --jq '.[].number'); do
-                gh issue close "$n" --comment "Superseded: $TAG was built with a newer upstream." || true
-              done
               exit 0
             fi
             sleep 5
           done
           echo "::error::could not push the new pins"; exit 1
+
+      - name: Close superseded held-back issues
+        # Whenever a release is built with the pinned upstream - pins moved
+        # by this workflow or by hand - an upstream held back at or before
+        # that release is superseded.
+        if: steps.build.outcome == 'success' && steps.build.outputs.held != 'true' && steps.build.outputs.skip != 'true' && env.PUBLISH != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . upstream/openwrt.conf
+          gh issue list --state open --label upstream-held --json number,title \
+            --jq '.[] | "\(.number) \(.title | sub("^Upstream held back: "; ""))"' |
+          while read -r n rel; do
+            # Release names are <prefix><yyyy.mm.dd>, so they sort as text
+            [ "$rel" \> "$OPENWRT_RELEASE" ] && continue
+            gh issue close "$n" --comment "Superseded: $TAG was built with $OPENWRT_RELEASE." || true
+          done
 
       - name: Report a held-back upstream
         if: always() && steps.build.outputs.held == 'true'
@@ -352,9 +365,9 @@ jobs:
             echo
             echo "<details><summary>End of the build log</summary>"
             echo
-            echo '\`\`\`'
+            echo '```'
             cat "$RUNNER_TEMP/held.log"
-            echo '\`\`\`'
+            echo '```'
             echo "</details>"
           } > held.md
           n=$(gh issue list --state open --label upstream-held --search "$PINS in:body" --json number --jq '.[0].number // empty')
