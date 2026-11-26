@@ -1,5 +1,8 @@
 # OpenWrt with NSS offload for the Xiaomi Redmi AX3000 (RA81)
 
+> [!CAUTION]
+> This repository is **AI-assisted** and has undergone only **limited human review**. Inspect changes and test carefully before flashing.
+
 OpenWrt (main, kernel 6.18) with Qualcomm **NSS hardware offload** for the
 Xiaomi **Redmi AX3000, model RA81**: wired forwarding, connection acceleration
 (ECM) and both Wi-Fi radios run in the IPQ5000's NSS core instead of on the two
